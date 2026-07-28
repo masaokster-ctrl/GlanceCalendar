@@ -1,0 +1,84 @@
+import { parseDayEventsResult, type DayEventsResult, type DayKind } from './dayEvents'
+
+export type FetchDayEventsOutcome =
+  | { kind: 'success'; result: DayEventsResult }
+  | { kind: 'aborted' }
+  | { kind: 'auth_failed' }
+  | { kind: 'forbidden' }
+  | { kind: 'timeout' }
+  | { kind: 'network_error' }
+  | { kind: 'rate_limited' }
+  | { kind: 'failed' }
+
+export interface FetchDayEventsParams {
+  day: DayKind
+  baseUrl: string
+  sessionToken: string
+  installId: string
+  requestId: string
+  signal: AbortSignal
+  timeoutMs?: number
+}
+
+const DEFAULT_TIMEOUT_MS = 15_000
+
+/**
+ * 認証付きでGET /plugin/calendar-events/dayを1回だけ呼ぶ。自動リトライは行わない
+ * (呼び出し側もリトライしないこと)。signal(二度押しキャンセル用)とタイムアウトの両方を尊重する。
+ * analyzeAudioと同じくfetch自体のsignalは内部のfetchControllerに統一する。
+ */
+export async function fetchDayEvents(params: FetchDayEventsParams): Promise<FetchDayEventsOutcome> {
+  if (params.signal.aborted) {
+    return { kind: 'aborted' }
+  }
+
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const fetchController = new AbortController()
+  const timeoutTimer = setTimeout(() => fetchController.abort(), timeoutMs)
+  const onExternalAbort = (): void => fetchController.abort()
+  params.signal.addEventListener('abort', onExternalAbort)
+
+  const cleanup = (): void => {
+    clearTimeout(timeoutTimer)
+    params.signal.removeEventListener('abort', onExternalAbort)
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${params.baseUrl}/plugin/calendar-events/day?day=${params.day}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${params.sessionToken}`,
+        'X-Install-Id': params.installId,
+        'X-Request-Id': params.requestId,
+      },
+      signal: fetchController.signal,
+    })
+  } catch {
+    cleanup()
+    if (params.signal.aborted) {
+      return { kind: 'aborted' }
+    }
+    if (fetchController.signal.aborted) {
+      return { kind: 'timeout' }
+    }
+    return { kind: 'network_error' }
+  }
+  cleanup()
+
+  if (params.signal.aborted) {
+    return { kind: 'aborted' }
+  }
+
+  if (response.status === 401) return { kind: 'auth_failed' }
+  if (response.status === 403) return { kind: 'forbidden' }
+  if (response.status === 429) return { kind: 'rate_limited' }
+  if (response.status === 504) return { kind: 'timeout' }
+  if (!response.ok) return { kind: 'failed' }
+
+  const data: unknown = await response.json().catch(() => null)
+  const result = parseDayEventsResult(data)
+  if (!result) return { kind: 'failed' }
+
+  return { kind: 'success', result }
+}

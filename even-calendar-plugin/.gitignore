@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.ehpk
+
+# ローカル実機開発専用のセッション情報(scripts/create-dev-session.ps1が生成)。
+# 平文セッショントークンとinstallIdを含むため、絶対にコミットしないこと。
+.env.local
+scripts/.even-install-id

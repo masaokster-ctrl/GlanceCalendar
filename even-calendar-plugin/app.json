@@ -1,0 +1,21 @@
+{
+  "package_id": "com.masaokster.calendarwithgemini",
+  "edition": "202601",
+  "name": "Calendar with Gemini",
+  "version": "0.3.0",
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.12",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Uses Gemini to analyze spoken calendar requests and register confirmed events in Google Calendar.",
+      "whitelist": ["https://even-calendar-agent-probe-1082947954310.asia-northeast1.run.app"]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Records spoken calendar requests through the glasses microphone."
+    }
+  ],
+  "supported_languages": ["ja"]
+}

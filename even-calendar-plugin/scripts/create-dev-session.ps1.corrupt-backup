@@ -1,0 +1,135 @@
+<#
+.SYNOPSIS
+    ローカル実機開発専用: even-calendar-agent に開発用セッショントークン
+    (scope=audio:analyze, calendar:create, calendar:status, calendar:read、最大24時間)を発行し、
+    even-calendar-plugin の .env.local へ保存する。
+
+.DESCRIPTION
+    このスクリプトは本番配布方式ではない。QRサイドロードによるローカルG2実機テストのためだけに、
+    /plugin/analyze-audio を叩ける限定セッションを1つ発行する。
+
+    - installId はこのマシンで初回のみ生成し、.even-install-id (このスクリプトと同じ scripts フォルダ)
+      へ保存して以後再利用する。
+    - setup admin token は、環境変数 EVEN_SETUP_ADMIN_TOKEN、または
+      $env:USERPROFILE\.even-calendar-agent\setup-admin-token.txt (既に存在する場合のみ)、
+      またはこのスクリプトの対話プロンプト(非表示入力)のいずれかから取得する。
+      admin tokenはコマンドライン引数として受け取らない(プロセス一覧・シェル履歴に残るため)。
+    - 発行されたセッションの平文トークンは画面に表示せず、.env.local へのみ書き込む。
+    - admin token・session tokenのいずれも、このスクリプトはログへ出力しない。
+
+.PARAMETER BackendBaseUrl
+    even-calendar-agent のベースURL。省略時は本番Cloud Runエンドポイント。
+
+.PARAMETER ExpiresInSeconds
+    セッションの有効期限(秒)。最大86400(24時間)。省略時は86400。
+
+.EXAMPLE
+    ./scripts/create-dev-session.ps1
+#>
+
+[CmdletBinding()]
+param(
+    [string]$BackendBaseUrl = 'https://even-calendar-agent-probe-1082947954310.asia-northeast1.run.app',
+    [int]$ExpiresInSeconds = 86400
+)
+
+$ErrorActionPreference = 'Stop'
+
+$scriptDir = $PSScriptRoot
+$pluginRoot = Split-Path -Parent $scriptDir
+$installIdFile = Join-Path $scriptDir '.even-install-id'
+$envLocalFile = Join-Path $pluginRoot '.env.local'
+$adminTokenFile = Join-Path $env:USERPROFILE '.even-calendar-agent\setup-admin-token.txt'
+
+function Get-OrCreateInstallId {
+    if (Test-Path $installIdFile) {
+        $existing = (Get-Content -Path $installIdFile -Raw).Trim()
+        if ($existing) {
+            return $existing
+        }
+    }
+    $newId = [guid]::NewGuid().ToString()
+    Set-Content -Path $installIdFile -Value $newId -NoNewline -Encoding utf8
+    Write-Host "installId を新規生成しました: $installIdFile" -ForegroundColor DarkGray
+    return $newId
+}
+
+function Get-AdminTokenPlainText {
+    if ($env:EVEN_SETUP_ADMIN_TOKEN) {
+        Write-Host 'setup admin token を環境変数 EVEN_SETUP_ADMIN_TOKEN から取得しました。' -ForegroundColor DarkGray
+        return $env:EVEN_SETUP_ADMIN_TOKEN
+    }
+
+    if (Test-Path $adminTokenFile) {
+        $fromFile = (Get-Content -Path $adminTokenFile -Raw).Trim()
+        if ($fromFile) {
+            Write-Host "setup admin token を $adminTokenFile から取得しました。" -ForegroundColor DarkGray
+            return $fromFile
+        }
+    }
+
+    $secure = Read-Host -Prompt 'setup admin token を入力してください(画面には表示されません)' -AsSecureString
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+if ($ExpiresInSeconds -le 0 -or $ExpiresInSeconds -gt 86400) {
+    throw 'ExpiresInSeconds は 1〜86400 (24時間) の範囲で指定してください。'
+}
+
+$installId = Get-OrCreateInstallId
+$adminToken = Get-AdminTokenPlainText
+
+if (-not $adminToken) {
+    throw 'setup admin token を取得できませんでした。'
+}
+
+$body = @{
+    installId        = $installId
+    scope            = @('audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read')
+    expiresInSeconds = $ExpiresInSeconds
+} | ConvertTo-Json -Compress
+
+$headers = @{
+    Authorization = "Bearer $adminToken"
+    'Content-Type' = 'application/json'
+}
+
+Write-Host "開発用セッションを発行しています... ($BackendBaseUrl/plugin/dev-sessions)" -ForegroundColor Cyan
+
+try {
+    $response = Invoke-RestMethod -Method Post -Uri "$BackendBaseUrl/plugin/dev-sessions" -Headers $headers -Body $body
+}
+finally {
+    # 変数スコープに残る平文admin tokenをできるだけ早く破棄する
+    $adminToken = $null
+    $headers = $null
+}
+
+if (-not $response.token) {
+    throw 'レスポンスに token が含まれていません。'
+}
+
+$envLines = @(
+    "VITE_PLUGIN_SESSION_TOKEN=$($response.token)"
+    "VITE_PLUGIN_INSTALL_ID=$($response.installId)"
+)
+Set-Content -Path $envLocalFile -Value $envLines -Encoding utf8
+
+# session tokenは画面に一切表示しない
+$response.token = $null
+
+Write-Host ''
+Write-Host '開発用セッションを発行し、.env.local へ保存しました。' -ForegroundColor Green
+Write-Host "  installId : $installId"
+Write-Host "  scope     : audio:analyze, calendar:create, calendar:status, calendar:read"
+Write-Host "  expiresAt : $($response.expiresAt)"
+Write-Host "  保存先    : $envLocalFile"
+Write-Host ''
+Write-Host 'Vite dev server を再起動(または再読込)して環境変数を反映してください。' -ForegroundColor Yellow
+Write-Host 'このトークンは開発専用です。本番配布(Developer Portal公開)には使用しないでください。' -ForegroundColor Yellow
