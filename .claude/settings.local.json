@@ -174,7 +174,11 @@
       "Read(//c/Users/Masao/**)",
       "Bash(echo \"TSC:$?\")",
       "Bash(echo \"LINT:$?\")",
-      "Bash(grep -oE '^[A-Z_]+=.{0,3}' /c/even-dev/even-calendar-plugin/.env.local.dev-backup)"
+      "Bash(grep -oE '^[A-Z_]+=.{0,3}' /c/even-dev/even-calendar-plugin/.env.local.dev-backup)",
+      "Bash(gcloud --version)",
+      "Bash(echo \"TSC_EXIT:$?\")",
+      "Bash(echo \"LINT_EXIT:$?\")",
+      "Bash(echo \"BUILD_EXIT:$?\")"
     ]
   }
 }
