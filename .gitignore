@@ -39,6 +39,7 @@ _backup/
 *.sw?
 
 # Unrelated root scaffold (pre-existing quickstart example, out of scope for this feature)
+/app.json
 /index.html
 /package.json
 /package-lock.json
