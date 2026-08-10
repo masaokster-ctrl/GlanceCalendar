@@ -5,6 +5,7 @@ import { FakeEvenAppBridge } from './fakes/fakeEvenAppBridge'
 import { MAX_RECORDING_SECONDS } from '../src/recorder'
 import * as screens from '../src/screens'
 import { nowLocalIsoTokyo, type EventCandidateResult, type FollowupResult } from '../src/eventCandidate'
+import { inclusiveEndDate, monthDay } from '../src/allDayDisplay'
 import type { AnalyzeAudioOutcome, AnalyzeAudioParams } from '../src/analyzeAudioClient'
 import type { RegisterEventOutcome, RegisterEventParams, CheckStatusOutcome, PollForCompletionParams } from '../src/calendarRegistrationClient'
 import type { AnalyzeFollowupOutcome, AnalyzeFollowupParams, CancelConversationParams } from '../src/followupAudioClient'
@@ -82,6 +83,11 @@ function futureLocalDateTime(hoursFromNow: number): string {
   return nowLocalIsoTokyo(new Date(Date.now() + hoursFromNow * 3_600_000))
 }
 
+/** allDay候補(startDate/endDateExclusive)用。"YYYY-MM-DD"(Asia/Tokyo)を返す。 */
+function futureLocalDate(daysFromNow: number): string {
+  return futureLocalDateTime(daysFromNow * 24).slice(0, 10)
+}
+
 function eventCandidate(overrides: Partial<EventCandidateResult> = {}): EventCandidateResult {
   return {
     schemaVersion: '1',
@@ -106,8 +112,8 @@ function allDayEventCandidate(overrides: Partial<EventCandidateResult> = {}): Ev
     startLocal: null,
     endLocal: null,
     allDay: true,
-    startDate: '2026-08-03',
-    endDateExclusive: '2026-08-06',
+    startDate: futureLocalDate(3),
+    endDateExclusive: futureLocalDate(6),
     ...overrides,
   })
 }
@@ -1866,10 +1872,12 @@ describe('createApp', () => {
         stubHealthyFetch()
         const bridge = new FakeEvenAppBridge()
         const { fn: registerFn } = fakeRegister({ kind: 'success' })
+        const startDate = futureLocalDate(3)
+        const endDateExclusive = futureLocalDate(6)
         const app = await reachCandidate(
           bridge,
           { registerCalendarEventFn: registerFn },
-          { title: '夏季休暇', allDay: true, startLocal: null, endLocal: null, startDate: '2026-08-03', endDateExclusive: '2026-08-06' },
+          allDayEventCandidate({ title: '夏季休暇', startDate, endDateExclusive }),
         )
         expect(app.getScreen()).toBe('candidate')
 
@@ -1878,19 +1886,21 @@ describe('createApp', () => {
 
         expect(app.getScreen()).toBe('finalConfirm')
         const text = bridge.lastTextContent()
-        // 包含最終日(08/05)を表示し、Google APIの排他的終了日(endDateExclusive=08/06)はそのまま出さない。
-        expect(text).toContain('8/3〜8/5')
-        expect(text).not.toContain('8/6')
+        // 包含最終日を表示し、Google APIの排他的終了日(endDateExclusive)はそのまま出さない。
+        expect(text).toContain(`${monthDay(startDate)}〜${monthDay(inclusiveEndDate(endDateExclusive))}`)
+        expect(text).not.toContain(monthDay(endDateExclusive))
       })
 
       it('shows a single-day "終日 M/D" confirmation for a one-day all-day candidate (no range dash)', async () => {
         stubHealthyFetch()
         const bridge = new FakeEvenAppBridge()
         const { fn: registerFn } = fakeRegister({ kind: 'success' })
+        const startDate = futureLocalDate(3)
+        const endDateExclusive = futureLocalDate(4)
         const app = await reachCandidate(
           bridge,
           { registerCalendarEventFn: registerFn },
-          { title: '有給', allDay: true, startLocal: null, endLocal: null, startDate: '2026-08-03', endDateExclusive: '2026-08-04' },
+          allDayEventCandidate({ title: '有給', startDate, endDateExclusive }),
         )
 
         bridge.emit(press())
@@ -1898,19 +1908,21 @@ describe('createApp', () => {
 
         expect(app.getScreen()).toBe('finalConfirm')
         const text = bridge.lastTextContent()
-        expect(text).toContain('終日 8/3')
+        expect(text).toContain(`終日 ${monthDay(startDate)}`)
         expect(text).not.toContain('〜')
-        expect(text).not.toContain('8/4')
+        expect(text).not.toContain(monthDay(endDateExclusive))
       })
 
       it('POSTs allDay:true with startDate/endDateExclusive and no startLocal/endLocal for an all-day candidate', async () => {
         stubHealthyFetch()
         const bridge = new FakeEvenAppBridge()
         const { fn: registerFn, calls: registerCalls } = fakeRegister({ kind: 'success' })
+        const startDate = futureLocalDate(3)
+        const endDateExclusive = futureLocalDate(6)
         const app = await reachCandidate(
           bridge,
           { registerCalendarEventFn: registerFn },
-          { title: '夏季休暇', allDay: true, startLocal: null, endLocal: null, startDate: '2026-08-03', endDateExclusive: '2026-08-06' },
+          allDayEventCandidate({ title: '夏季休暇', startDate, endDateExclusive }),
         )
 
         bridge.emit(press()) // candidate -> finalConfirm
@@ -1923,8 +1935,8 @@ describe('createApp', () => {
         const call = registerCalls[0]
         expect(call?.allDay).toBe(true)
         if (call?.allDay) {
-          expect(call.startDate).toBe('2026-08-03')
-          expect(call.endDateExclusive).toBe('2026-08-06')
+          expect(call.startDate).toBe(startDate)
+          expect(call.endDateExclusive).toBe(endDateExclusive)
         }
         expect((call as unknown as { startLocal?: unknown }).startLocal).toBeUndefined()
         expect((call as unknown as { endLocal?: unknown }).endLocal).toBeUndefined()
@@ -1934,10 +1946,12 @@ describe('createApp', () => {
         stubHealthyFetch()
         const bridge = new FakeEvenAppBridge()
         const { fn: registerFn } = fakeRegister({ kind: 'success' })
+        const startDate = futureLocalDate(3)
+        const endDateExclusive = futureLocalDate(6)
         const app = await reachCandidate(
           bridge,
           { registerCalendarEventFn: registerFn },
-          { title: '夏季休暇', allDay: true, startLocal: null, endLocal: null, startDate: '2026-08-03', endDateExclusive: '2026-08-06' },
+          allDayEventCandidate({ title: '夏季休暇', startDate, endDateExclusive }),
         )
 
         bridge.emit(press())
@@ -1949,8 +1963,8 @@ describe('createApp', () => {
         expect(app.getRegistrationContext().state).toBe('completed')
         const text = bridge.lastTextContent()
         expect(text).toContain('登録しました')
-        expect(text).toContain('8/3〜8/5')
-        expect(text).not.toContain('8/6')
+        expect(text).toContain(`${monthDay(startDate)}〜${monthDay(inclusiveEndDate(endDateExclusive))}`)
+        expect(text).not.toContain(monthDay(endDateExclusive))
       })
 
       it('POSTs allDay:false with startLocal/endLocal and no startDate/endDateExclusive for a regular timed candidate (regression)', async () => {
