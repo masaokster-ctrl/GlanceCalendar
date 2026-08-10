@@ -6,6 +6,8 @@
 // 成功の基準にしている)。実機では戻り値が厳密なtrueでないことがあるため、本アプリでも
 // 「例外が投げられたか」だけをマイク停止自体の失敗基準とし、それ以外の後処理(PCM結合・秒数計算・
 // 画面更新)の失敗とは別のエラーコード(audio_processing_failed)で扱う。
+import { getActiveLocale, type Locale } from './i18n/locale'
+
 export type ErrorCode =
   | 'audio_start_failed'
   | 'audio_stop_failed'
@@ -49,7 +51,7 @@ export type ErrorCode =
   | 'edit_analysis_invalid_timing'
   | 'unknown'
 
-const MESSAGES: Record<ErrorCode, string> = {
+const MESSAGES_JA: Record<ErrorCode, string> = {
   audio_start_failed: '録音を開始できませんでした',
   audio_stop_failed: 'マイクを停止できませんでした',
   audio_processing_failed: '音声の処理に失敗しました',
@@ -101,6 +103,62 @@ const MESSAGES: Record<ErrorCode, string> = {
   unknown: 'エラーが発生しました',
 }
 
+// 英語版。G2は576x288の1コンテナ表示のため、日本語版と同じ長さ感(1行は短く、改行位置も同じ)を保つ。
+// 技術的なステータスコードやエラー詳細をG2へ出さない方針は日本語版と同一。
+const MESSAGES_EN: Record<ErrorCode, string> = {
+  audio_start_failed: 'Could not start recording',
+  audio_stop_failed: 'Could not stop the mic',
+  audio_processing_failed: 'Could not process the audio',
+  audio_event_timeout: 'No audio data received',
+  startup_page_failed: 'Could not initialize the screen',
+  analysis_auth_failed: 'Setup required',
+  analysis_timeout: 'Analysis timed out',
+  analysis_network_error: 'Cannot reach the server',
+  analysis_rate_limited: 'Please wait a moment',
+  analysis_failed: 'Could not analyze the audio',
+  registration_auth_failed: 'Setup required',
+  registration_candidate_expired: 'Expired',
+  registration_oauth_not_connected: 'Calendar connection required',
+  registration_network_error: 'Cannot reach the server',
+  registration_failed: 'Could not register',
+  followup_conversation_expired: 'Please start over',
+  day_events_auth_failed: 'Setup required',
+  day_events_forbidden: 'Cannot read the calendar\nCheck permissions',
+  day_events_rate_limited: 'Too many requests\nPlease try again shortly',
+  day_events_timeout: 'Connection failed\nPlease try again',
+  day_events_network_error: 'Connection failed\nPlease try again',
+  day_events_failed: 'Could not load events',
+  event_detail_auth_failed: 'Setup required',
+  event_detail_forbidden: 'Cannot read the calendar\nCheck permissions',
+  event_detail_rate_limited: 'Please wait a moment',
+  event_detail_timeout: 'Connection failed\nPlease try again',
+  event_detail_network_error: 'Connection failed\nPlease try again',
+  event_detail_failed: 'Could not load the event',
+  event_mutation_invalid: 'Please check your input',
+  event_mutation_rate_limited: 'Please wait a moment',
+  event_mutation_not_connected: 'Calendar connection required',
+  event_mutation_timeout: 'Connection failed\nPlease try again',
+  event_mutation_network_error: 'Connection failed\nPlease try again',
+  event_mutation_failed: 'Could not complete the action',
+  edit_analysis_timeout: 'Analysis timed out',
+  edit_analysis_network_error: 'Cannot reach the server',
+  edit_analysis_rate_limited: 'Please wait a moment',
+  edit_analysis_failed: 'Could not analyze the change',
+  edit_analysis_not_understood: 'Could not understand the change',
+  edit_analysis_invalid_timing: 'That date or time is not valid',
+  unknown: 'Something went wrong',
+}
+
+const MESSAGES: Record<Locale, Record<ErrorCode, string>> = {
+  ja: MESSAGES_JA,
+  en: MESSAGES_EN,
+}
+
+/**
+ * シグネチャは意図的に変更しない(app.ts側の全呼び出しを書き換えないため)。
+ * 現在ロケールはi18n/locale.tsのモジュールスコープ値を参照する(既定'ja' = 従来と完全同一)。
+ */
 export function errorMessage(code: ErrorCode): string {
-  return MESSAGES[code] ?? MESSAGES.unknown
+  const table = MESSAGES[getActiveLocale()] ?? MESSAGES_JA
+  return table[code] ?? table.unknown
 }

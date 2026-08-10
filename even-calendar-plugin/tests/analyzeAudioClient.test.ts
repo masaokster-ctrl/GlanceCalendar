@@ -63,6 +63,22 @@ describe('analyzeAudio', () => {
     expect(headers['X-Request-Id']).toBe(BASE_PARAMS.requestId)
   })
 
+  it('adds ?locale=en to the URL when locale is specified', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, validResultBody()))
+    vi.stubGlobal('fetch', fetchMock)
+    await analyzeAudio({ ...BASE_PARAMS, locale: 'en', signal: new AbortController().signal })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://backend.test/plugin/analyze-audio?locale=en')
+  })
+
+  it('sends the exact same URL as before when locale is not specified', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, validResultBody()))
+    vi.stubGlobal('fetch', fetchMock)
+    await analyzeAudio({ ...BASE_PARAMS, signal: new AbortController().signal })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://backend.test/plugin/analyze-audio')
+  })
+
   it('maps 401/403 to auth_failed', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 401 })))
     expect((await analyzeAudio({ ...BASE_PARAMS, signal: new AbortController().signal })).kind).toBe('auth_failed')

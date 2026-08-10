@@ -47,6 +47,22 @@ describe('fetchUpcomingEvents', () => {
     expect(headers['X-Request-Id']).toBe(BASE_PARAMS.requestId)
   })
 
+  it('adds locale=en to the query string when locale is specified', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, validResultBody()))
+    vi.stubGlobal('fetch', fetchMock)
+    await fetchUpcomingEvents({ ...BASE_PARAMS, locale: 'en', signal: new AbortController().signal })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://backend.test/plugin/calendar-events/upcoming?limit=5&locale=en')
+  })
+
+  it('sends the exact same URL as before when locale is not specified', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, validResultBody()))
+    vi.stubGlobal('fetch', fetchMock)
+    await fetchUpcomingEvents({ ...BASE_PARAMS, signal: new AbortController().signal })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://backend.test/plugin/calendar-events/upcoming?limit=5')
+  })
+
   it('maps 401 to auth_failed', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 401 })))
     expect((await fetchUpcomingEvents({ ...BASE_PARAMS, signal: new AbortController().signal })).kind).toBe('auth_failed')

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { parseInitialFragmentResult } from '../src/gemini/eventCandidateSchema.js';
+import { parseInitialFragmentResult, EVENT_CANDIDATE_RESPONSE_SCHEMA } from '../src/gemini/eventCandidateSchema.js';
+import { FOLLOWUP_RESULT_RESPONSE_SCHEMA } from '../src/gemini/followupResultSchema.js';
+import { ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION } from '../src/gemini/allDayVocabulary.js';
 
 function validPayload(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
@@ -139,5 +141,52 @@ describe('parseInitialFragmentResult', () => {
     const parsed = parseInitialFragmentResult(validPayload({ transcription: '発話全文...' }));
     expect(parsed).not.toBeNull();
     expect(parsed).not.toHaveProperty('transcription');
+  });
+});
+
+describe('EVENT_CANDIDATE_RESPONSE_SCHEMA: allDaySignal語彙の集約(設計§3.5)', () => {
+  it('allDaySignal.descriptionは共有定数ALL_DAY_SIGNAL_SCHEMA_DESCRIPTIONと同一', () => {
+    const props = EVENT_CANDIDATE_RESPONSE_SCHEMA.properties as Record<string, { description?: string }>;
+    expect(props.allDaySignal?.description).toBe(ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION);
+  });
+
+  it('eventCandidateSchemaとfollowupResultSchemaのallDaySignal.descriptionは集約後も同一文字列', () => {
+    const eventProps = EVENT_CANDIDATE_RESPONSE_SCHEMA.properties as Record<string, { description?: string }>;
+    const followupProps = FOLLOWUP_RESULT_RESPONSE_SCHEMA.properties as Record<string, { description?: string }>;
+    expect(eventProps.allDaySignal?.description).toBe(followupProps.allDaySignal?.description);
+  });
+
+  it('語彙にJA/EN両方の終日トリガ語の例が含まれる', () => {
+    const description = ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION;
+    expect(description).toContain('終日');
+    expect(description).toContain('有給');
+    expect(description).toContain('PTO');
+    expect(description).toContain('day off');
+    expect(description).toContain('vacation');
+  });
+
+  it('required/propertyOrderingは不変', () => {
+    expect(EVENT_CANDIDATE_RESPONSE_SCHEMA.required).toEqual([
+      'schemaVersion',
+      'resultType',
+      'timeZone',
+      'explicitCorrection',
+      'assumptions',
+    ]);
+    expect(EVENT_CANDIDATE_RESPONSE_SCHEMA.propertyOrdering).toEqual([
+      'schemaVersion',
+      'resultType',
+      'title',
+      'dateLocal',
+      'endDateLocal',
+      'startTimeLocal',
+      'durationMinutes',
+      'allDaySignal',
+      'timeZone',
+      'explicitCorrection',
+      'clarificationField',
+      'clarificationQuestion',
+      'assumptions',
+    ]);
   });
 });

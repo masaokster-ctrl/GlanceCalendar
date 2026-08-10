@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCandidate, BLANK_FRAGMENTS, type CandidateFragments, type GeminiFragmentOutput } from '../src/gemini/candidateFragments.js';
+import {
+  resolveCandidate,
+  parseGeminiFragmentOutput,
+  BLANK_FRAGMENTS,
+  type CandidateFragments,
+  type GeminiFragmentOutput,
+} from '../src/gemini/candidateFragments.js';
 
 const NOW = '2026-07-22T10:00:00';
 
@@ -389,5 +395,199 @@ describe('resolveCandidate: 終日・複数日予定', () => {
     expect(resolved.allDay).toBe(true);
     expect(resolved.startDate).toBe('2026-08-10');
     expect(resolved.endDateExclusive).toBe('2026-08-11');
+  });
+});
+
+describe('resolveCandidate: locale引数(設計§4.2、案(A)) - サーバー側フォールバック文言3本', () => {
+  it('繰り返し未対応: locale省略時は既存の日本語文言と一字一句同じ', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({
+        resultType: 'event_candidate',
+        title: '会議',
+        dateLocal: '2026-08-03',
+        endDateLocal: '2026-08-05',
+        startTimeLocal: '10:00:00',
+      }),
+      NOW,
+    );
+    expect(resolved.resultType).toBe('needs_clarification');
+    expect(resolved.clarificationField).toBe('multiple');
+    expect(resolved.clarificationQuestion).toBe('複数日にわたる繰り返し予定には対応していません');
+  });
+
+  it('繰り返し未対応: locale="ja"を明示しても省略時と同一の日本語文言', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({
+        resultType: 'event_candidate',
+        title: '会議',
+        dateLocal: '2026-08-03',
+        endDateLocal: '2026-08-05',
+        startTimeLocal: '10:00:00',
+      }),
+      NOW,
+      'ja',
+    );
+    expect(resolved.clarificationQuestion).toBe('複数日にわたる繰り返し予定には対応していません');
+  });
+
+  it('繰り返し未対応: locale="en"では英語の文言("Recurring events aren\'t supported.", 34字)', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({
+        resultType: 'event_candidate',
+        title: 'Meeting',
+        dateLocal: '2026-08-03',
+        endDateLocal: '2026-08-05',
+        startTimeLocal: '10:00:00',
+      }),
+      NOW,
+      'en',
+    );
+    expect(resolved.clarificationQuestion).toBe("Recurring events aren't supported.");
+    expect(resolved.clarificationQuestion?.length).toBe(34);
+  });
+
+  it('日付解決失敗(存在しない終了日): locale省略時は既存の日本語文言と一字一句同じ', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: '休暇', dateLocal: '2026-08-03', endDateLocal: '2026-02-30' }),
+      NOW,
+    );
+    expect(resolved.resultType).toBe('needs_clarification');
+    expect(resolved.clarificationQuestion).toBe('日付を確認できませんでした。もう一度お試しください');
+  });
+
+  it('日付解決失敗: locale="en"では英語の文言("Couldn\'t read the date. Try again.", 34字)', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Vacation', dateLocal: '2026-08-03', endDateLocal: '2026-02-30' }),
+      NOW,
+      'en',
+    );
+    expect(resolved.clarificationQuestion).toBe("Couldn't read the date. Try again.");
+    expect(resolved.clarificationQuestion?.length).toBe(34);
+  });
+
+  it('過去日時: locale省略時は既存の日本語文言と一字一句同じ', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: '打ち合わせ', dateLocal: '2020-01-01', startTimeLocal: '10:00:00' }),
+      NOW,
+    );
+    expect(resolved.resultType).toBe('needs_clarification');
+    expect(resolved.clarificationQuestion).toBe('過去の日時のようです。もう一度お試しください');
+  });
+
+  it('過去日時: locale="en"では英語の文言("That time has already passed. Try again.", 40字)', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Meeting', dateLocal: '2020-01-01', startTimeLocal: '10:00:00' }),
+      NOW,
+      'en',
+    );
+    expect(resolved.clarificationQuestion).toBe('That time has already passed. Try again.');
+    expect(resolved.clarificationQuestion?.length).toBe(40);
+  });
+
+  it('英語3本は全て60字の検証済みハードリミット(even-calendar-plugin/src/screens.ts MAX_DISPLAY_LENGTH)以内', () => {
+    const HARD_LIMIT = 60; // 検証済み。これのみをハード判定に使う(44は助言的ターゲットに過ぎない)。
+    const recurring = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({
+        resultType: 'event_candidate',
+        title: 'Meeting',
+        dateLocal: '2026-08-03',
+        endDateLocal: '2026-08-05',
+        startTimeLocal: '10:00:00',
+      }),
+      NOW,
+      'en',
+    );
+    const dateUnresolvable = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Vacation', dateLocal: '2026-08-03', endDateLocal: '2026-02-30' }),
+      NOW,
+      'en',
+    );
+    const pastDatetime = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Meeting', dateLocal: '2020-01-01', startTimeLocal: '10:00:00' }),
+      NOW,
+      'en',
+    );
+    for (const r of [recurring, dateUnresolvable, pastDatetime]) {
+      expect(r.clarificationQuestion).not.toBeNull();
+      expect(r.clarificationQuestion!.length).toBeLessThanOrEqual(HARD_LIMIT);
+      // 44字は助言的ターゲットの参考アサート(超過してもテスト失敗にはしない設計なので、
+      // ここでは実測値が34/34/40であることの記録としてのみ確認する)。
+      expect(r.clarificationQuestion!.length).toBeLessThanOrEqual(44);
+    }
+  });
+
+  it('timeZone!=="Asia/Tokyo"はlocaleの有無に関わらず引き続きparseGeminiFragmentOutputでnullを返す(不変条件の回帰確認)', () => {
+    const raw = {
+      schemaVersion: '1',
+      resultType: 'event_candidate',
+      title: 'x',
+      dateLocal: '2026-08-03',
+      startTimeLocal: '10:00:00',
+      durationMinutes: 60,
+      endDateLocal: null,
+      allDaySignal: null,
+      timeZone: 'UTC',
+      explicitCorrection: false,
+      clarificationField: null,
+      clarificationQuestion: null,
+      assumptions: [],
+    };
+    expect(parseGeminiFragmentOutput(raw, ['event_candidate', 'needs_clarification', 'not_calendar_request'])).toBeNull();
+  });
+
+  it('locale="en"を渡しても終日の包含→排他変換(月またぎ・年またぎ・うるう年)は不変', () => {
+    const monthRollover = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Trip', dateLocal: '2026-08-30', endDateLocal: '2026-09-02' }),
+      NOW,
+      'en',
+    );
+    expect(monthRollover.startDate).toBe('2026-08-30');
+    expect(monthRollover.endDateExclusive).toBe('2026-09-03');
+
+    const yearRollover = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Vacation', dateLocal: '2026-12-29', endDateLocal: '2027-01-03' }),
+      NOW,
+      'en',
+    );
+    expect(yearRollover.startDate).toBe('2026-12-29');
+    expect(yearRollover.endDateExclusive).toBe('2027-01-04');
+
+    const leapYear = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({ resultType: 'event_candidate', title: 'Vacation', dateLocal: '2024-02-28', endDateLocal: '2024-02-29' }),
+      NOW,
+      'en',
+    );
+    expect(leapYear.startDate).toBe('2024-02-28');
+    expect(leapYear.endDateExclusive).toBe('2024-03-01');
+  });
+
+  it('locale="en"を渡しても「複数日の期間+時刻」→clarificationField="multiple"の挙動は不変', () => {
+    const resolved = resolveCandidate(
+      BLANK_FRAGMENTS,
+      fragmentOutput({
+        resultType: 'event_candidate',
+        title: 'Meeting',
+        dateLocal: '2026-08-03',
+        endDateLocal: '2026-08-05',
+        startTimeLocal: '10:00:00',
+      }),
+      NOW,
+      'en',
+    );
+    expect(resolved.resultType).toBe('needs_clarification');
+    expect(resolved.clarificationField).toBe('multiple');
   });
 });

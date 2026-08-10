@@ -7,10 +7,19 @@ import { computeOperationId, computeGoogleEventId } from '../calendar/calendarEv
 import { sanitizeError } from '../security/sanitizedError.js';
 import { classifyProductCalendarError } from '../product/productCalendarErrorClassifier.js';
 import type { PluginEventCandidateRepository } from '../firestore/pluginEventCandidateRepository.js';
+import type { SupportedLocale } from '../i18n/locale.js';
 
 const LEASE_DURATION_MS = 30_000;
 const CALENDAR_ID = 'primary';
-const EVENT_DESCRIPTION = 'Even G2から登録';
+/**
+ * システム生成の来歴マーカー(ユーザー入力ではない)。POST bodyの `description` フィールドは
+ * 存在しないため、ユーザー発話・ユーザー入力のdescriptionと連結・上書きされることはない。
+ * 既に登録済みの予定のdescriptionは元の言語のまま永久に残る(仕様、遡及書き換えなし)。
+ */
+const EVENT_DESCRIPTION: Record<SupportedLocale, string> = {
+  ja: 'Even G2から登録',
+  en: 'Registered from Even G2',
+};
 
 export type RegisterCandidateOutcomeKind =
   | 'success'
@@ -48,6 +57,7 @@ export async function registerCandidateEvent(
   deps: RegisterCandidateDeps,
   candidateId: string,
   userId?: string | null,
+  locale: SupportedLocale = 'ja',
 ): Promise<RegisterCandidateOutcome> {
   const now = deps.clock.now();
   const leaseOwner = randomUUID();
@@ -137,7 +147,7 @@ export async function registerCandidateEvent(
             allDay: true,
             startDate: doc.startDate,
             endDateExclusive: doc.endDateExclusive,
-            description: EVENT_DESCRIPTION,
+            description: EVENT_DESCRIPTION[locale],
             operationId,
           }
         : {
@@ -147,7 +157,7 @@ export async function registerCandidateEvent(
             startDateTime: operationIdInput.startDateTime,
             endDateTime: operationIdInput.endDateTime,
             timeZone: TOKYO_ZONE,
-            description: EVENT_DESCRIPTION,
+            description: EVENT_DESCRIPTION[locale],
             operationId,
           },
     );

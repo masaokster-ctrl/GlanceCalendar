@@ -1,4 +1,5 @@
 import { parseEditInstructionResponse, type EditInstructionResult } from './editInstruction'
+import type { Locale } from './i18n/locale'
 
 export type AnalyzeEditAudioOutcome =
   | { kind: 'success'; result: EditInstructionResult }
@@ -18,6 +19,8 @@ export interface AnalyzeEditAudioParams {
   requestId: string
   signal: AbortSignal
   timeoutMs?: number
+  /** 未指定時は従来と完全同一のURL(locale query無し)。正規化済みの'ja'|'en'のみを渡すこと。 */
+  locale?: Locale
 }
 
 const DEFAULT_TIMEOUT_MS = 35_000
@@ -56,7 +59,8 @@ export async function analyzeEditAudio(params: AnalyzeEditAudioParams): Promise<
 
   let response: Response
   try {
-    response = await fetch(`${params.baseUrl}/plugin/analyze-edit-audio`, {
+    const localeQuery = params.locale ? `?locale=${params.locale}` : ''
+    response = await fetch(`${params.baseUrl}/plugin/analyze-edit-audio${localeQuery}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'audio/wav',

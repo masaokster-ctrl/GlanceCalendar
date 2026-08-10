@@ -1,4 +1,5 @@
 import { parseUpcomingEventsResult, type UpcomingEventsResult } from './upcomingEvents'
+import type { Locale } from './i18n/locale'
 
 export type FetchUpcomingEventsOutcome =
   | { kind: 'success'; result: UpcomingEventsResult }
@@ -18,6 +19,8 @@ export interface FetchUpcomingEventsParams {
   requestId: string
   signal: AbortSignal
   timeoutMs?: number
+  /** 未指定時は従来と完全同一のURL(locale query無し)。正規化済みの'ja'|'en'のみを渡すこと。 */
+  locale?: Locale
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -44,7 +47,8 @@ export async function fetchUpcomingEvents(params: FetchUpcomingEventsParams): Pr
 
   let response: Response
   try {
-    response = await fetch(`${params.baseUrl}/plugin/calendar-events/upcoming?limit=${params.limit}`, {
+    const localeQuery = params.locale ? `&locale=${params.locale}` : ''
+    response = await fetch(`${params.baseUrl}/plugin/calendar-events/upcoming?limit=${params.limit}${localeQuery}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${params.sessionToken}`,

@@ -1,4 +1,5 @@
 import { parseDayEventsResult, type DayEventsResult, type DayKind } from './dayEvents'
+import type { Locale } from './i18n/locale'
 
 export type FetchDayEventsOutcome =
   | { kind: 'success'; result: DayEventsResult }
@@ -18,6 +19,8 @@ export interface FetchDayEventsParams {
   requestId: string
   signal: AbortSignal
   timeoutMs?: number
+  /** 未指定時は従来と完全同一のURL(locale query無し)。正規化済みの'ja'|'en'のみを渡すこと。 */
+  locale?: Locale
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -45,7 +48,8 @@ export async function fetchDayEvents(params: FetchDayEventsParams): Promise<Fetc
 
   let response: Response
   try {
-    response = await fetch(`${params.baseUrl}/plugin/calendar-events/day?day=${params.day}`, {
+    const localeQuery = params.locale ? `&locale=${params.locale}` : ''
+    response = await fetch(`${params.baseUrl}/plugin/calendar-events/day?day=${params.day}${localeQuery}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${params.sessionToken}`,

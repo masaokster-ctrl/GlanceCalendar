@@ -13,7 +13,8 @@ import { PcmBuffer, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS } from './recor
 import { encodeWav } from './wav'
 import * as screens from './screens'
 import { checkBackendHealth } from './backendHealth'
-import { saveBackendAvailable } from './storage'
+import { saveBackendAvailable, loadLocale } from './storage'
+import { detectLocale, setActiveLocale, getActiveLocale, type Locale } from './i18n/locale'
 import { logSafe } from './safeLog'
 import { errorMessage, type ErrorCode } from './errors'
 import { BACKEND_BASE_URL, PLUGIN_SESSION_TOKEN, PLUGIN_INSTALL_ID } from './config'
@@ -242,6 +243,11 @@ export interface AppDeps {
   sessionToken?: string
   installId?: string
   createRequestId?: () => string
+  /**
+   * 指定時はロケール自動検出(bridge保存値/navigator.languages)をスキップし、常にこの値を使う
+   * (テスト用の決定的な注入経路)。未指定時はstart()内でdetectLocale()により解決する。
+   */
+  locale?: Locale
   analysisTimeoutMs?: number
   registrationTimeoutMs?: number
   registrationPollIntervalMs?: number
@@ -284,6 +290,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   const registrationPollMaxAttempts = deps.registrationPollMaxAttempts
   const dayEventsTimeoutMs = deps.dayEventsTimeoutMs ?? DAY_EVENTS_TIMEOUT_MS
   const upcomingEventsTimeoutMs = deps.upcomingEventsTimeoutMs ?? UPCOMING_EVENTS_TIMEOUT_MS
+  const configuredLocale = deps.locale
 
   // devセッション(sessionToken)が設定されていなければ製品モード。.env.local未設定の本番ビルドでは
   // sessionTokenは常に空文字列のため、これが自然に製品モードへフォールバックする。
@@ -707,6 +714,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         requestId,
         signal: controller.signal,
         timeoutMs: analysisTimeoutMs,
+        locale: getActiveLocale(),
       }),
       analyzeAudioFn,
     )
@@ -938,6 +946,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         conversationId,
         signal: controller.signal,
         timeoutMs: analysisTimeoutMs,
+        locale: getActiveLocale(),
       }),
       analyzeFollowupAudioFn,
     )
@@ -1121,6 +1130,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
               endDateExclusive: candidate.endDateExclusive,
               signal: controller.signal,
               timeoutMs: registrationTimeoutMs,
+              locale: getActiveLocale(),
             }
           : {
               baseUrl,
@@ -1135,6 +1145,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
               endLocal: candidate.endLocal,
               signal: controller.signal,
               timeoutMs: registrationTimeoutMs,
+              locale: getActiveLocale(),
             },
       registerCalendarEventFn,
     )
@@ -1242,6 +1253,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         requestId,
         signal: controller.signal,
         timeoutMs: dayEventsTimeoutMs,
+        locale: getActiveLocale(),
       }),
       fetchDayEventsFn,
     )
@@ -1370,6 +1382,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         requestId,
         signal: controller.signal,
         timeoutMs: upcomingEventsTimeoutMs,
+        locale: getActiveLocale(),
       }),
       fetchUpcomingEventsFn,
     )
@@ -1472,6 +1485,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         requestId,
         signal: controller.signal,
         timeoutMs: dayEventsTimeoutMs,
+        locale: getActiveLocale(),
       }),
       fetchEventDetailFn,
     )
@@ -1875,6 +1889,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         requestId,
         signal: controller.signal,
         timeoutMs: analysisTimeoutMs,
+        locale: getActiveLocale(),
       }),
       analyzeEditAudioFn,
     )
@@ -2049,6 +2064,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         requestId,
         signal: controller.signal,
         timeoutMs: dayEventsTimeoutMs,
+        locale: getActiveLocale(),
       }),
       fetchEventDetailFn,
     )
@@ -2182,7 +2198,8 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
 
   /** notConnected/pairingError画面の単押しでのみ呼ばれる。新しいペアリングを開始する。 */
   async function startPairingFlow(): Promise<void> {
-    if (currentScreen !== 'notConnected' && currentScreen !== 'pairingError') return
+    // Phase 2K: notConnected/pairingErrorに加え、homeメニュー5番目(明示的な再接続)からの起動も許可する。
+    if (currentScreen !== 'notConnected' && currentScreen !== 'pairingError' && currentScreen !== 'home') return
     pairingContext = pairingReducer(pairingContext, { type: 'START' })
     await showScreen('pairing', screens.pairingScreenText('', ''))
     if (pairingContext.state !== 'starting') return
@@ -2238,8 +2255,11 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
           await startUpcomingEvents()
         } else if (homeMenuIndex === 2) {
           await startDayEvents('today')
-        } else {
+        } else if (homeMenuIndex === 3) {
           await startDayEvents('tomorrow')
+        } else {
+          // Phase 2K: 5番目(Googleカレンダーを再接続)。既存のペアリングフローをそのまま再利用する。
+          await startPairingFlow()
         }
         return
       case 'recording':
@@ -2753,6 +2773,17 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   }
 
   async function start(): Promise<void> {
+    // ロケール解決(サーバへ送出するlocale query/bodyの値を決める)。Even Hub SDKにはlocale APIが
+    // 無いため、保存済み値(bridge)> navigator.languages > 'ja' の優先順で決定する。
+    // deps.locale指定時はテスト用の決定的注入として検出をスキップする。既存動作(locale未検出時の
+    // 挙動)には一切影響しない(各クライアントはlocale未指定時と完全同一のURL/bodyになる設計のため)。
+    if (configuredLocale) {
+      setActiveLocale(configuredLocale)
+    } else {
+      const stored = await loadLocale(bridge).catch(() => null)
+      setActiveLocale(detectLocale({ stored, navigatorLanguages: globalThis.navigator?.languages }))
+    }
+
     // devセッションが有効な間はdevモード(既存動作を変えない)。製品モードでは、有効な
     // device credential(refresh tokenが未失効)を既に保持していればホームへ、なければ
     // 未接続画面を最初に表示する(Calendar/Gemini APIはペアリング完了前には一切呼ばれない)。

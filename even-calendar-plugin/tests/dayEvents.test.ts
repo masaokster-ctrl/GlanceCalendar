@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseDayEventItem, parseDayEventsResult, sortEventsForDisplay, formatDayEventLine, type DayEventItem } from '../src/dayEvents'
+import { resetActiveLocaleForTest, setActiveLocale } from '../src/i18n/locale'
 
 function timed(overrides: Partial<DayEventItem> = {}): DayEventItem {
   return {
@@ -170,5 +171,43 @@ describe('formatDayEventLine', () => {
   it('falls back to just the title when startLocal/endLocal are missing for a non-all-day event', () => {
     const event = timed({ startLocal: null, endLocal: null })
     expect(formatDayEventLine(event, '2026-07-23')).toBe('title')
+  })
+})
+
+describe('formatDayEventLine (en)', () => {
+  beforeEach(() => setActiveLocale('en'))
+  afterEach(() => resetActiveLocaleForTest())
+
+  it('formats a same-day timed event as "HH:mm-HH:mm title"', () => {
+    expect(formatDayEventLine(timed(), '2026-07-23')).toBe('09:00-10:00 title')
+  })
+
+  it('formats an all-day event as "All day title"', () => {
+    const event: DayEventItem = { eventId: 'k', title: 'Vacation', allDay: true, startLocal: null, endLocal: null, startDate: '2026-07-23', endDateExclusive: '2026-07-24' }
+    expect(formatDayEventLine(event, '2026-07-23')).toBe('All day Vacation')
+  })
+
+  it('formats an event continuing from the previous day as "From prev day-HH:mm title"', () => {
+    const event = timed({ startLocal: '2026-07-22T22:00:00', endLocal: '2026-07-23T10:00:00' })
+    expect(formatDayEventLine(event, '2026-07-23')).toBe('From prev day-10:00 title')
+  })
+
+  it('formats an event continuing into the next day as "HH:mm-next day title"', () => {
+    const event = timed({ startLocal: '2026-07-23T22:00:00', endLocal: '2026-07-24T10:00:00' })
+    expect(formatDayEventLine(event, '2026-07-23')).toBe('22:00-next day title')
+  })
+
+  it('formats an event spanning the entire boundary day as "Ongoing title"', () => {
+    const event = timed({ startLocal: '2026-07-22T10:00:00', endLocal: '2026-07-24T10:00:00' })
+    expect(formatDayEventLine(event, '2026-07-23')).toBe('Ongoing title')
+  })
+
+  it('never uses "All day" wording for a multi-day timed event (must stay distinct from an all-day event)', () => {
+    const spansBoundary = timed({ startLocal: '2026-07-22T10:00:00', endLocal: '2026-07-24T10:00:00' })
+    const fromPrevDay = timed({ startLocal: '2026-07-22T22:00:00', endLocal: '2026-07-23T10:00:00' })
+    const toNextDay = timed({ startLocal: '2026-07-23T22:00:00', endLocal: '2026-07-24T10:00:00' })
+    expect(formatDayEventLine(spansBoundary, '2026-07-23')).not.toContain('All day')
+    expect(formatDayEventLine(fromPrevDay, '2026-07-23')).not.toContain('All day')
+    expect(formatDayEventLine(toNextDay, '2026-07-23')).not.toContain('All day')
   })
 })

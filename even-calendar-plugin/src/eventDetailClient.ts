@@ -1,4 +1,5 @@
 import { parseEventDetail, type EventDetail } from './eventDetail'
+import type { Locale } from './i18n/locale'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 
@@ -23,6 +24,8 @@ export interface FetchEventDetailParams {
   requestId: string
   signal: AbortSignal
   timeoutMs?: number
+  /** 未指定時は従来と完全同一のURL(locale query無し)。正規化済みの'ja'|'en'のみを渡すこと。 */
+  locale?: Locale
 }
 
 function withInternalTimeout(
@@ -55,7 +58,8 @@ export async function fetchEventDetail(params: FetchEventDetailParams): Promise<
 
   let response: Response
   try {
-    response = await fetch(`${params.baseUrl}/plugin/calendar-events/${encodeURIComponent(params.eventId)}`, {
+    const localeQuery = params.locale ? `?locale=${params.locale}` : ''
+    response = await fetch(`${params.baseUrl}/plugin/calendar-events/${encodeURIComponent(params.eventId)}${localeQuery}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${params.sessionToken}`,

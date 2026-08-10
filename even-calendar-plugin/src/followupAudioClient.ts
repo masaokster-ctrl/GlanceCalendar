@@ -1,4 +1,5 @@
 import { parseFollowupResult, type FollowupResult } from './eventCandidate'
+import type { Locale } from './i18n/locale'
 
 export type AnalyzeFollowupOutcome =
   | {
@@ -26,6 +27,8 @@ export interface AnalyzeFollowupParams {
   conversationId: string
   signal: AbortSignal
   timeoutMs?: number
+  /** 未指定時は従来と完全同一のURL(locale query無し)。正規化済みの'ja'|'en'のみを渡すこと。 */
+  locale?: Locale
 }
 
 const DEFAULT_TIMEOUT_MS = 35_000
@@ -59,7 +62,8 @@ export async function analyzeFollowupAudio(params: AnalyzeFollowupParams): Promi
 
   let response: Response
   try {
-    response = await fetch(`${params.baseUrl}/plugin/analyze-followup-audio`, {
+    const localeQuery = params.locale ? `?locale=${params.locale}` : ''
+    response = await fetch(`${params.baseUrl}/plugin/analyze-followup-audio${localeQuery}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'audio/wav',

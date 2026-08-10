@@ -1,10 +1,15 @@
 import { toTokyoLocalFromIso } from '../time/tokyoDateTime.js';
+import type { SupportedLocale } from '../i18n/locale.js';
 import type { CalendarEventDetail, CalendarEventFullDetail } from './calendarClient.js';
 
 const MAX_TITLE_LENGTH = 80;
 const MAX_LOCATION_LENGTH = 200;
 const MAX_DESCRIPTION_LENGTH = 500;
-const UNTITLED = '名称未設定';
+/** 表示専用フォールバック。Calendarへの書き戻しやユーザー入力の置き換えには絶対に使わない。 */
+const UNTITLED: Record<SupportedLocale, string> = {
+  ja: '名称未設定',
+  en: 'Untitled',
+};
 const CONTROL_CHAR_CODE_MAX = 0x1f;
 const DEL_CHAR_CODE = 0x7f;
 
@@ -62,11 +67,11 @@ function stripControlChars(raw: string): string {
     .trim();
 }
 
-/** 制御文字・改行を除去し、空/未設定は「名称未設定」、最大80文字に丸める。 */
-export function sanitizeTitle(raw: string | null): string {
-  if (raw === null) return UNTITLED;
+/** 制御文字・改行を除去し、空/未設定は locale 別の「名称未設定」/「Untitled」、最大80文字に丸める。 */
+export function sanitizeTitle(raw: string | null, locale: SupportedLocale = 'ja'): string {
+  if (raw === null) return UNTITLED[locale];
   const stripped = stripControlChars(raw);
-  if (stripped.length === 0) return UNTITLED;
+  if (stripped.length === 0) return UNTITLED[locale];
   return stripped.length > MAX_TITLE_LENGTH ? stripped.slice(0, MAX_TITLE_LENGTH) : stripped;
 }
 
@@ -83,8 +88,8 @@ function sanitizeOptionalText(raw: string | null, maxLength: number): string | u
  * startLocal/endLocal(Asia/Tokyoローカル、実際の開始/終了。日境界へのクリップはしない)を返す。
  * 変換に失敗した場合はその項目のみ該当フィールドを省略する(タイトルは表示できる)。
  */
-export function toEventResponseItem(detail: CalendarEventDetail): EventResponseItem {
-  const title = sanitizeTitle(detail.summary);
+export function toEventResponseItem(detail: CalendarEventDetail, locale: SupportedLocale = 'ja'): EventResponseItem {
+  const title = sanitizeTitle(detail.summary, locale);
 
   if (detail.startDate !== null) {
     return {
@@ -109,8 +114,8 @@ export function toEventResponseItem(detail: CalendarEventDetail): EventResponseI
 }
 
 /** /plugin/calendar-events/:eventId (GET) 用。値のないフィールドは省略する(空文字/nullを返さない)。 */
-export function toEventDetailResponseItem(detail: CalendarEventFullDetail): EventDetailResponseItem {
-  const title = sanitizeTitle(detail.summary);
+export function toEventDetailResponseItem(detail: CalendarEventFullDetail, locale: SupportedLocale = 'ja'): EventDetailResponseItem {
+  const title = sanitizeTitle(detail.summary, locale);
   const timing =
     detail.startDate !== null
       ? { allDay: true as const, startDate: detail.startDate, endDateExclusive: detail.endDate ?? detail.startDate }

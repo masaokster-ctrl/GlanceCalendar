@@ -1,8 +1,318 @@
 import { formatAllDayWhen } from './allDayDisplay'
+import { formatCandidateWhenEn } from './i18n/dateFormats'
+import { getActiveLocale, type Locale } from './i18n/locale'
 
-export const HOME_MENU_ITEMS = ['予定を登録', '直近5件の予定', '今日の予定', '明日の予定'] as const
+// 画面文言はロケール別テーブルに集約する。既存のexport関数のシグネチャは意図的に一切変更しない
+// (app.ts側の98箇所の呼び出しを書き換えないため)。現在ロケールはi18n/locale.tsのモジュールスコープ値。
+// 既定は'ja'のため、setActiveLocaleを呼ばない限り従来と完全に同一の文字列を返す。
+
+/** Phase 2K: ホームメニューは「要素数5・順序不変・index4が再接続」が不変条件。両ロケールで型として固定する。 */
+type HomeMenuTuple = readonly [string, string, string, string, string]
+
+export const HOME_MENU_ITEMS_BY_LOCALE: Record<Locale, HomeMenuTuple> = {
+  // Phase 2K: 5番目の項目はGoogle OAuth再連携専用。既存4項目の順番・動作は変更しない(末尾に追加のみ)。
+  ja: ['予定を登録', '直近5件の予定', '今日の予定', '明日の予定', 'Googleカレンダーを再接続'],
+  en: ['New event', 'Next 5 events', "Today's events", "Tomorrow's events", 'Reconnect Google Calendar'],
+}
+
+/** 後方互換のため日本語の配列をそのまま公開し続ける(既存テスト・既存importが参照している)。 */
+export const HOME_MENU_ITEMS = HOME_MENU_ITEMS_BY_LOCALE.ja
 export const HOME_MENU_ITEM_COUNT = HOME_MENU_ITEMS.length
 const HOME_MENU_WINDOW_SIZE = 3
+
+const EVENT_DETAIL_MENU_ITEMS_BY_LOCALE: Record<Locale, readonly [string, string, string]> = {
+  ja: ['編集', '削除', '一覧に戻る'],
+  en: ['Edit', 'Delete', 'Back to list'],
+}
+
+export const EVENT_DETAIL_MENU_ITEMS = EVENT_DETAIL_MENU_ITEMS_BY_LOCALE.ja
+
+export type PairingErrorKind = 'expired' | 'communication_failure' | 'cancelled' | 'auth_failure'
+
+interface ScreenStrings {
+  homeTitle: string
+  hintSwipeSelect: string
+  hintPressRun: string
+  hintDoubleExit: string
+
+  recording: string
+  pressAgainToFinish: string
+  hintDoubleCancel: string
+  hintDoubleAbort: string
+  hintDoubleRetry: string
+  hintDoubleBack: string
+  hintDoubleToList: string
+  hintPressHome: string
+  hintPressOrDoubleHome: string
+  hintPressOrDoubleToList: string
+
+  audioCaptured: string
+  duration: (seconds: number) => string
+  hintPressConfirm: string
+  tooShort: string
+
+  analyzing: string
+  pleaseWait: string
+
+  confirmEvent: string
+  hintPressToFinalConfirm: string
+  registerQuestion: string
+  hintPressRegister: string
+  registering: string
+  checkingResultLine1: string
+  checkingResultLine2: string
+  registered: string
+
+  clarificationNeeded: string
+  hintPressAnswer: string
+  notCalendarLine1: string
+  notCalendarLine2: string
+  hintPressRetry: string
+
+  followupReady: string
+  hintPressStartRecording: string
+  followupRecording: string
+  followupCaptured: string
+  hintPressSend: string
+
+  dayLabel: Record<'today' | 'tomorrow', string>
+  loading: string
+  noEvents: string
+  moreEvents: string
+  hintPressDetail: string
+  upcomingLabel: string
+
+  menu: string
+  hintSwipeMore: string
+  hintPressMenu: string
+  hintPressSelect: string
+  hintPressRetryAction: string
+
+  goneLine1: string
+  goneLine2: string
+  deleteQuestion: string
+  hintPressDelete: string
+  deleting: string
+
+  editRecording: string
+  editCaptured: string
+  hintDoubleRerecord: string
+  editAnalyzing: string
+  editNotUnderstoodLine1: string
+  editNotUnderstoodLine2: string
+  hintPressRerecord: string
+  hintDoubleBackToEvent: string
+  editConfirmQuestion: string
+  hintPressUpdate: string
+  editApplying: string
+
+  appName: string
+  notConnectedLine1: string
+  notConnectedLine2: string
+  hintPressStartPairing: string
+  openOnPhone: string
+  waitingForConnection: string
+  connected: string
+  hintPressToMenu: string
+  pairingError: Record<PairingErrorKind, string>
+  hintPressOrDoubleReconnect: string
+}
+
+const JA: ScreenStrings = {
+  homeTitle: 'Calendar with Gemini',
+  hintSwipeSelect: '上下スワイプ: 選択',
+  hintPressRun: '押す: 実行',
+  hintDoubleExit: '二度押し: 終了',
+
+  recording: '録音中...',
+  pressAgainToFinish: 'もう一度押して終了',
+  hintDoubleCancel: '二度押し: キャンセル',
+  hintDoubleAbort: '二度押し: 中止',
+  hintDoubleRetry: '二度押し: やり直し',
+  hintDoubleBack: '二度押し: 戻る',
+  hintDoubleToList: '二度押し: 一覧へ',
+  hintPressHome: '押す: ホーム',
+  hintPressOrDoubleHome: '押す/二度押し: ホーム',
+  hintPressOrDoubleToList: '押す/二度押し: 一覧へ',
+
+  audioCaptured: '音声を取得しました',
+  duration: (seconds) => `長さ: 約${seconds}秒`,
+  hintPressConfirm: '押す: 確認へ',
+  tooShort: '短すぎます',
+
+  analyzing: '解析中...',
+  pleaseWait: 'しばらくお待ちください',
+
+  confirmEvent: '予定を確認',
+  hintPressToFinalConfirm: '押す: 登録確認',
+  registerQuestion: '登録しますか?',
+  hintPressRegister: '押す: 登録',
+  registering: '登録中...',
+  checkingResultLine1: '登録結果を',
+  checkingResultLine2: '確認しています',
+  registered: '登録しました',
+
+  clarificationNeeded: '確認が必要です',
+  hintPressAnswer: '押す: 回答する',
+  notCalendarLine1: '予定の内容を',
+  notCalendarLine2: '話してください',
+  hintPressRetry: '押す: やり直す',
+
+  followupReady: '回答を話してください',
+  hintPressStartRecording: '押す: 録音開始',
+  followupRecording: '回答を録音中...',
+  followupCaptured: '回答を取得しました',
+  hintPressSend: '押す: 送信',
+
+  dayLabel: { today: '今日の予定', tomorrow: '明日の予定' },
+  loading: '読み込み中...',
+  noEvents: '予定はありません',
+  moreEvents: 'ほかの予定があります',
+  hintPressDetail: '押す: 詳細を見る',
+  upcomingLabel: '直近5件の予定',
+
+  menu: 'メニュー',
+  hintSwipeMore: '上下スワイプ: 続き',
+  hintPressMenu: '押す: メニュー',
+  hintPressSelect: '押す: 選択',
+  hintPressRetryAction: '押す: 再試行',
+
+  goneLine1: 'この予定は更新または',
+  goneLine2: '削除されました',
+  deleteQuestion: 'この予定を削除しますか?',
+  hintPressDelete: '押す: 削除する',
+  deleting: '削除中...',
+
+  editRecording: '変更内容を録音中...',
+  editCaptured: '変更内容を取得しました',
+  hintDoubleRerecord: '二度押し: 録音し直す',
+  editAnalyzing: '変更内容を解析中...',
+  editNotUnderstoodLine1: '変更内容を',
+  editNotUnderstoodLine2: '認識できませんでした',
+  hintPressRerecord: '押す: 録音し直す',
+  hintDoubleBackToEvent: '二度押し: 予定に戻る',
+  editConfirmQuestion: 'この内容で更新しますか?',
+  hintPressUpdate: '押す: 更新する',
+  editApplying: '更新中...',
+
+  appName: 'Calendar with Gemini',
+  notConnectedLine1: 'Googleカレンダーとの',
+  notConnectedLine2: '接続が必要です',
+  hintPressStartPairing: '押す: 接続を開始',
+  openOnPhone: 'スマートフォンで開く',
+  waitingForConnection: '接続待ち...',
+  connected: '接続しました',
+  hintPressToMenu: '押す: メニューへ',
+  pairingError: {
+    expired: '接続の有効期限が切れました',
+    communication_failure: '通信に失敗しました',
+    cancelled: '接続を中止しました',
+    auth_failure: '認証に失敗しました',
+  },
+  hintPressOrDoubleReconnect: '押す/二度押し: 再接続',
+}
+
+// 英語版。G2は576x288の1コンテナ表示のため、行数と1行の短さを日本語版と揃える。
+// 記号は半角のみ(全角チルダ・enダッシュはG2フォント欠字リスクのため使わない)。
+const EN: ScreenStrings = {
+  homeTitle: 'Calendar with Gemini',
+  hintSwipeSelect: 'Swipe: select',
+  hintPressRun: 'Press: open',
+  hintDoubleExit: 'Double press: exit',
+
+  recording: 'Recording...',
+  pressAgainToFinish: 'Press again to finish',
+  hintDoubleCancel: 'Double press: cancel',
+  hintDoubleAbort: 'Double press: cancel',
+  hintDoubleRetry: 'Double press: redo',
+  hintDoubleBack: 'Double press: back',
+  hintDoubleToList: 'Double press: list',
+  hintPressHome: 'Press: home',
+  hintPressOrDoubleHome: 'Press/double press: home',
+  hintPressOrDoubleToList: 'Press/double press: list',
+
+  audioCaptured: 'Audio captured',
+  duration: (seconds) => `Length: about ${seconds}s`,
+  hintPressConfirm: 'Press: review',
+  tooShort: 'Too short',
+
+  analyzing: 'Analyzing...',
+  pleaseWait: 'Please wait',
+
+  confirmEvent: 'Review event',
+  hintPressToFinalConfirm: 'Press: confirm',
+  registerQuestion: 'Add this event?',
+  hintPressRegister: 'Press: add',
+  registering: 'Adding...',
+  checkingResultLine1: 'Checking the',
+  checkingResultLine2: 'result',
+  registered: 'Event added',
+
+  clarificationNeeded: 'Need to confirm',
+  hintPressAnswer: 'Press: answer',
+  notCalendarLine1: 'Please describe',
+  notCalendarLine2: 'the event',
+  hintPressRetry: 'Press: try again',
+
+  followupReady: 'Please say your answer',
+  hintPressStartRecording: 'Press: start recording',
+  followupRecording: 'Recording answer...',
+  followupCaptured: 'Answer captured',
+  hintPressSend: 'Press: send',
+
+  dayLabel: { today: "Today's events", tomorrow: "Tomorrow's events" },
+  loading: 'Loading...',
+  noEvents: 'No events',
+  moreEvents: 'More events',
+  hintPressDetail: 'Press: details',
+  upcomingLabel: 'Next 5 events',
+
+  menu: 'Menu',
+  hintSwipeMore: 'Swipe: more',
+  hintPressMenu: 'Press: menu',
+  hintPressSelect: 'Press: select',
+  hintPressRetryAction: 'Press: retry',
+
+  goneLine1: 'This event was updated',
+  goneLine2: 'or deleted',
+  deleteQuestion: 'Delete this event?',
+  hintPressDelete: 'Press: delete',
+  deleting: 'Deleting...',
+
+  editRecording: 'Recording changes...',
+  editCaptured: 'Changes captured',
+  hintDoubleRerecord: 'Double press: record again',
+  editAnalyzing: 'Analyzing changes...',
+  editNotUnderstoodLine1: 'Could not understand',
+  editNotUnderstoodLine2: 'the changes',
+  hintPressRerecord: 'Press: record again',
+  hintDoubleBackToEvent: 'Double press: back to event',
+  editConfirmQuestion: 'Apply these changes?',
+  hintPressUpdate: 'Press: update',
+  editApplying: 'Updating...',
+
+  appName: 'Calendar with Gemini',
+  notConnectedLine1: 'Connect your',
+  notConnectedLine2: 'Google Calendar',
+  hintPressStartPairing: 'Press: connect',
+  openOnPhone: 'Open on your phone',
+  waitingForConnection: 'Waiting...',
+  connected: 'Connected',
+  hintPressToMenu: 'Press: menu',
+  pairingError: {
+    expired: 'The connection request expired',
+    communication_failure: 'Communication failed',
+    cancelled: 'Connection cancelled',
+    auth_failure: 'Authentication failed',
+  },
+  hintPressOrDoubleReconnect: 'Press/double press: reconnect',
+}
+
+const STRINGS: Record<Locale, ScreenStrings> = { ja: JA, en: EN }
+
+function s(): ScreenStrings {
+  return STRINGS[getActiveLocale()] ?? JA
+}
 
 /**
  * ネイティブスクロールを使わないNSize項目ウィンドウ方式の共通計算。選択位置が末尾寄りのときは
@@ -19,25 +329,26 @@ export function windowStart(selectedIndex: number, total: number, windowSize: nu
  * ヘッダーに "選択位置/全件数" を表示する。
  */
 export function homeScreenText(selectedIndex: number): string {
-  const total = HOME_MENU_ITEM_COUNT
+  const items = HOME_MENU_ITEMS_BY_LOCALE[getActiveLocale()] ?? HOME_MENU_ITEMS_BY_LOCALE.ja
+  const total = items.length
   const start = windowStart(selectedIndex, total, HOME_MENU_WINDOW_SIZE)
-  const visibleItems = HOME_MENU_ITEMS.slice(start, start + HOME_MENU_WINDOW_SIZE)
+  const visibleItems = items.slice(start, start + HOME_MENU_WINDOW_SIZE)
   const lines = visibleItems.map((item, i) => (start + i === selectedIndex ? `> ${item}` : `  ${item}`))
-  const header = `Calendar with Gemini ${selectedIndex + 1}/${total}`
-  return [header, '', ...lines, '', '上下スワイプ: 選択', '押す: 実行', '二度押し: 終了'].join('\n')
+  const header = `${s().homeTitle} ${selectedIndex + 1}/${total}`
+  return [header, '', ...lines, '', s().hintSwipeSelect, s().hintPressRun, s().hintDoubleExit].join('\n')
 }
 
 export function recordingScreenText(): string {
-  return ['録音中...', '', 'もう一度押して終了', '二度押し: キャンセル'].join('\n')
+  return [s().recording, '', s().pressAgainToFinish, s().hintDoubleCancel].join('\n')
 }
 
 export function capturedScreenText(durationSec: number): string {
   const rounded = Math.max(1, Math.round(durationSec))
-  return ['音声を取得しました', `長さ: 約${rounded}秒`, '', '押す: 確認へ', '二度押し: やり直し'].join('\n')
+  return [s().audioCaptured, s().duration(rounded), '', s().hintPressConfirm, s().hintDoubleRetry].join('\n')
 }
 
 export function tooShortScreenText(): string {
-  return ['短すぎます', '', '押す/二度押し: ホーム'].join('\n')
+  return [s().tooShort, '', s().hintPressOrDoubleHome].join('\n')
 }
 
 const MAX_DISPLAY_LENGTH = 60
@@ -49,7 +360,7 @@ export function truncateForDisplay(text: string, maxLength: number = MAX_DISPLAY
 }
 
 export function analyzingScreenText(): string {
-  return ['解析中...', 'しばらくお待ちください', '', '二度押し: 中止'].join('\n')
+  return [s().analyzing, s().pleaseWait, '', s().hintDoubleAbort].join('\n')
 }
 
 function pad2(n: number): string {
@@ -61,6 +372,7 @@ export function formatCandidateWhen(
   start: { month: number; day: number; hour: number; minute: number },
   end: { hour: number; minute: number },
 ): string {
+  if (getActiveLocale() === 'en') return formatCandidateWhenEn(start, end)
   return `${start.month}/${start.day} ${pad2(start.hour)}:${pad2(start.minute)}-${pad2(end.hour)}:${pad2(end.minute)}`
 }
 
@@ -74,57 +386,56 @@ export function formatAllDayCandidateWhen(startDate: string, endDateExclusive: s
 }
 
 export function candidateScreenText(title: string, whenText: string): string {
-  return ['予定を確認', truncateForDisplay(title), whenText, '', '押す: 登録確認', '二度押し: 中止'].join('\n')
+  return [s().confirmEvent, truncateForDisplay(title), whenText, '', s().hintPressToFinalConfirm, s().hintDoubleAbort].join('\n')
 }
 
 export function finalConfirmScreenText(title: string, whenText: string): string {
-  return ['登録しますか?', truncateForDisplay(title), whenText, '', '押す: 登録', '二度押し: 中止'].join('\n')
+  return [s().registerQuestion, truncateForDisplay(title), whenText, '', s().hintPressRegister, s().hintDoubleAbort].join('\n')
 }
 
 export function registeringScreenText(): string {
-  return ['登録中...', 'しばらくお待ちください'].join('\n')
+  return [s().registering, s().pleaseWait].join('\n')
 }
 
 export function checkingStatusScreenText(): string {
-  return ['登録結果を', '確認しています', '', 'しばらくお待ちください'].join('\n')
+  return [s().checkingResultLine1, s().checkingResultLine2, '', s().pleaseWait].join('\n')
 }
 
 export function registeredScreenText(whenText: string): string {
-  return ['登録しました', whenText, '', '押す: ホーム'].join('\n')
+  return [s().registered, whenText, '', s().hintPressHome].join('\n')
 }
 
 export function clarificationScreenText(question: string): string {
-  return ['確認が必要です', truncateForDisplay(question), '', '押す: 回答する', '二度押し: 中止'].join('\n')
+  return [s().clarificationNeeded, truncateForDisplay(question), '', s().hintPressAnswer, s().hintDoubleAbort].join('\n')
 }
 
 export function notCalendarScreenText(): string {
-  return ['予定の内容を', '話してください', '', '押す: やり直す', '二度押し: 中止'].join('\n')
+  return [s().notCalendarLine1, s().notCalendarLine2, '', s().hintPressRetry, s().hintDoubleAbort].join('\n')
 }
 
 export function followupReadyScreenText(): string {
-  return ['回答を話してください', '', '押す: 録音開始', '二度押し: 中止'].join('\n')
+  return [s().followupReady, '', s().hintPressStartRecording, s().hintDoubleAbort].join('\n')
 }
 
 export function followupRecordingScreenText(): string {
-  return ['回答を録音中...', '', 'もう一度押して終了', '二度押し: 中止'].join('\n')
+  return [s().followupRecording, '', s().pressAgainToFinish, s().hintDoubleAbort].join('\n')
 }
 
 export function followupCapturedScreenText(durationSec: number): string {
   const rounded = Math.max(1, Math.round(durationSec))
-  return ['回答を取得しました', `長さ: 約${rounded}秒`, '', '押す: 送信', '二度押し: やり直し'].join('\n')
+  return [s().followupCaptured, s().duration(rounded), '', s().hintPressSend, s().hintDoubleRetry].join('\n')
 }
 
-const DAY_LABEL: Record<'today' | 'tomorrow', string> = {
-  today: '今日の予定',
-  tomorrow: '明日の予定',
+function dayLabel(day: 'today' | 'tomorrow'): string {
+  return s().dayLabel[day]
 }
 
 export function dayLoadingScreenText(day: 'today' | 'tomorrow'): string {
-  return [DAY_LABEL[day], '読み込み中...'].join('\n')
+  return [dayLabel(day), s().loading].join('\n')
 }
 
 export function dayEmptyScreenText(day: 'today' | 'tomorrow'): string {
-  return [DAY_LABEL[day], '予定はありません', '', '二度押し: 戻る'].join('\n')
+  return [dayLabel(day), s().noEvents, '', s().hintDoubleBack].join('\n')
 }
 
 /**
@@ -140,23 +451,21 @@ export function dayEventsScreenText(
   isLastWindow: boolean,
   truncated: boolean,
 ): string {
-  const header = `${DAY_LABEL[day]} ${selectedIndex + 1}/${totalCount}`
-  const footer = isLastWindow && truncated ? ['ほかの予定があります'] : []
-  return [header, '', ...lines, ...footer, '', '押す: 詳細を見る'].join('\n')
+  const header = `${dayLabel(day)} ${selectedIndex + 1}/${totalCount}`
+  const footer = isLastWindow && truncated ? [s().moreEvents] : []
+  return [header, '', ...lines, ...footer, '', s().hintPressDetail].join('\n')
 }
 
 export function dayErrorScreenText(message: string): string {
-  return [message, '', '二度押し: 戻る'].join('\n')
+  return [message, '', s().hintDoubleBack].join('\n')
 }
 
-const UPCOMING_LABEL = '直近5件の予定'
-
 export function upcomingLoadingScreenText(): string {
-  return [UPCOMING_LABEL, '読み込み中...'].join('\n')
+  return [s().upcomingLabel, s().loading].join('\n')
 }
 
 export function upcomingEmptyScreenText(): string {
-  return [UPCOMING_LABEL, '予定はありません', '', '二度押し: 戻る'].join('\n')
+  return [s().upcomingLabel, s().noEvents, '', s().hintDoubleBack].join('\n')
 }
 
 /**
@@ -164,19 +473,19 @@ export function upcomingEmptyScreenText(): string {
  * 選択中の1行だけ'> 'プレフィックスを付けた状態で渡されている前提(ホームメニューと同じ表現)。
  */
 export function upcomingEventsScreenText(selectedIndex: number, totalCount: number, lines: string[], isLastWindow: boolean, truncated: boolean): string {
-  const header = `${UPCOMING_LABEL} ${selectedIndex + 1}/${totalCount}`
-  const footer = isLastWindow && truncated ? ['ほかの予定があります'] : []
-  return [header, '', ...lines, ...footer, '', '押す: 詳細を見る'].join('\n')
+  const header = `${s().upcomingLabel} ${selectedIndex + 1}/${totalCount}`
+  const footer = isLastWindow && truncated ? [s().moreEvents] : []
+  return [header, '', ...lines, ...footer, '', s().hintPressDetail].join('\n')
 }
 
 export function errorScreenText(message: string): string {
-  return [message, '', '押す/二度押し: ホーム'].join('\n')
+  return [message, '', s().hintPressOrDoubleHome].join('\n')
 }
 
 // --- 予定詳細/編集/削除画面(eventIdは絶対に含めないこと) ---
 
 export function eventDetailLoadingScreenText(): string {
-  return ['読み込み中...'].join('\n')
+  return [s().loading].join('\n')
 }
 
 /**
@@ -185,55 +494,54 @@ export function eventDetailLoadingScreenText(): string {
  */
 export function eventDetailScreenText(title: string, page: number, pageCount: number, lines: string[]): string {
   const header = pageCount > 1 ? `${truncateForDisplay(title, 40)} ${page + 1}/${pageCount}` : truncateForDisplay(title, 40)
-  const hint = pageCount > 1 ? ['上下スワイプ: 続き', '押す: メニュー', '二度押し: 一覧へ'] : ['押す: メニュー', '二度押し: 一覧へ']
+  const hint = pageCount > 1 ? [s().hintSwipeMore, s().hintPressMenu, s().hintDoubleToList] : [s().hintPressMenu, s().hintDoubleToList]
   return [header, '', ...lines, '', ...hint].join('\n')
 }
 
-export const EVENT_DETAIL_MENU_ITEMS = ['編集', '削除', '一覧に戻る'] as const
-
 /** 詳細画面の単押しで開くアクションメニュー(編集/削除/一覧に戻る)。ホームメニューと同じカーソル表現。 */
 export function eventDetailMenuScreenText(selectedIndex: number): string {
-  const lines = EVENT_DETAIL_MENU_ITEMS.map((item, i) => (i === selectedIndex ? `> ${item}` : `  ${item}`))
-  return ['メニュー', '', ...lines, '', '押す: 選択', '二度押し: 戻る'].join('\n')
+  const items = EVENT_DETAIL_MENU_ITEMS_BY_LOCALE[getActiveLocale()] ?? EVENT_DETAIL_MENU_ITEMS_BY_LOCALE.ja
+  const lines = items.map((item, i) => (i === selectedIndex ? `> ${item}` : `  ${item}`))
+  return [s().menu, '', ...lines, '', s().hintPressSelect, s().hintDoubleBack].join('\n')
 }
 
 export function eventDetailErrorScreenText(message: string): string {
-  return [message, '', '押す: 再試行', '二度押し: 一覧へ'].join('\n')
+  return [message, '', s().hintPressRetryAction, s().hintDoubleToList].join('\n')
 }
 
 /** 予定が他端末で更新/削除済みだった場合(404/409)専用。古い詳細を出し続けず、必ず一覧へ戻す。 */
 export function eventGoneScreenText(): string {
-  return ['この予定は更新または', '削除されました', '', '押す/二度押し: 一覧へ'].join('\n')
+  return [s().goneLine1, s().goneLine2, '', s().hintPressOrDoubleToList].join('\n')
 }
 
 export function deleteConfirmScreenText(title: string, whenText: string): string {
-  return [truncateForDisplay(title, 40), whenText, '', 'この予定を削除しますか?', '', '押す: 削除する', '二度押し: キャンセル'].join('\n')
+  return [truncateForDisplay(title, 40), whenText, '', s().deleteQuestion, '', s().hintPressDelete, s().hintDoubleCancel].join('\n')
 }
 
 export function deletingScreenText(): string {
-  return ['削除中...', 'しばらくお待ちください'].join('\n')
+  return [s().deleting, s().pleaseWait].join('\n')
 }
 
 /** 更新(PATCH)/削除(DELETE)の一時的な失敗(タイムアウト・通信エラー等)専用。conflictはeventGoneScreenTextを使う。 */
 export function eventMutationErrorScreenText(message: string): string {
-  return [message, '', '押す: 再試行', '二度押し: 一覧へ'].join('\n')
+  return [message, '', s().hintPressRetryAction, s().hintDoubleToList].join('\n')
 }
 
 export function editRecordingScreenText(): string {
-  return ['変更内容を録音中...', '', 'もう一度押して終了', '二度押し: 中止'].join('\n')
+  return [s().editRecording, '', s().pressAgainToFinish, s().hintDoubleAbort].join('\n')
 }
 
 export function editCapturedScreenText(durationSec: number): string {
   const rounded = Math.max(1, Math.round(durationSec))
-  return ['変更内容を取得しました', `長さ: 約${rounded}秒`, '', '押す: 確認へ', '二度押し: 録音し直す'].join('\n')
+  return [s().editCaptured, s().duration(rounded), '', s().hintPressConfirm, s().hintDoubleRerecord].join('\n')
 }
 
 export function editAnalyzingScreenText(): string {
-  return ['変更内容を解析中...', 'しばらくお待ちください', '', '二度押し: 中止'].join('\n')
+  return [s().editAnalyzing, s().pleaseWait, '', s().hintDoubleAbort].join('\n')
 }
 
 export function editNotUnderstoodScreenText(): string {
-  return ['変更内容を', '認識できませんでした', '', '押す: 録音し直す', '二度押し: 予定に戻る'].join('\n')
+  return [s().editNotUnderstoodLine1, s().editNotUnderstoodLine2, '', s().hintPressRerecord, s().hintDoubleBackToEvent].join('\n')
 }
 
 export interface EditDiffLine {
@@ -245,35 +553,28 @@ export interface EditDiffLine {
 /** 実際に変更されたフィールドだけをbefore→afterで列挙する(diffは呼び出し側で計算済み)。 */
 export function editConfirmScreenText(diff: EditDiffLine[]): string {
   const lines = diff.flatMap((d) => [`${d.label}:`, `${truncateForDisplay(d.before, 26)} → ${truncateForDisplay(d.after, 26)}`])
-  return ['この内容で更新しますか?', '', ...lines, '', '押す: 更新する', '二度押し: キャンセル'].join('\n')
+  return [s().editConfirmQuestion, '', ...lines, '', s().hintPressUpdate, s().hintDoubleCancel].join('\n')
 }
 
 export function editApplyingScreenText(): string {
-  return ['更新中...', 'しばらくお待ちください'].join('\n')
+  return [s().editApplying, s().pleaseWait].join('\n')
 }
 
 // --- Phase 2H: 製品用ペアリング画面 ---
 
 export function notConnectedScreenText(): string {
-  return ['Calendar with Gemini', 'Googleカレンダーとの', '接続が必要です', '', '押す: 接続を開始', '二度押し: 終了'].join('\n')
+  return [s().appName, s().notConnectedLine1, s().notConnectedLine2, '', s().hintPressStartPairing, s().hintDoubleExit].join('\n')
 }
 
 /** verificationUrlは短縮済み表示用の文字列であること前提(呼び出し側で整形)。 */
 export function pairingScreenText(verificationUrl: string, userCode: string): string {
-  return ['スマートフォンで開く', verificationUrl, userCode, '', '接続待ち...', '二度押し: 中止'].join('\n')
+  return [s().openOnPhone, verificationUrl, userCode, '', s().waitingForConnection, s().hintDoubleAbort].join('\n')
 }
 
 export function pairingSuccessScreenText(): string {
-  return ['接続しました', '', '押す: メニューへ'].join('\n')
+  return [s().connected, '', s().hintPressToMenu].join('\n')
 }
 
-const PAIRING_ERROR_MESSAGES: Record<'expired' | 'communication_failure' | 'cancelled' | 'auth_failure', string> = {
-  expired: '接続の有効期限が切れました',
-  communication_failure: '通信に失敗しました',
-  cancelled: '接続を中止しました',
-  auth_failure: '認証に失敗しました',
-}
-
-export function pairingErrorScreenText(kind: 'expired' | 'communication_failure' | 'cancelled' | 'auth_failure'): string {
-  return [PAIRING_ERROR_MESSAGES[kind], '', '押す/二度押し: 再接続'].join('\n')
+export function pairingErrorScreenText(kind: PairingErrorKind): string {
+  return [s().pairingError[kind], '', s().hintPressOrDoubleReconnect].join('\n')
 }

@@ -18,6 +18,7 @@ import { classifyProductCalendarError } from '../product/productCalendarErrorCla
 import type { GeminiClient } from '../gemini/geminiClient.js';
 import { buildEditSystemInstruction } from '../gemini/editSystemInstruction.js';
 import { parseEditInstructionGeminiOutput, resolveEditInstruction, type CurrentEventContext } from '../gemini/editInstructionSchema.js';
+import { localeFromQuery } from '../i18n/locale.js';
 
 const REQUIRED_SCOPE = 'audio:analyze';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -235,7 +236,8 @@ export function createPluginAnalyzeEditAudioRouter(deps: PluginAnalyzeEditAudioR
       }
 
       const nowLocal = nowLocalIsoTokyo(deps.clock);
-      const systemInstruction = buildEditSystemInstruction(nowLocal, currentContext);
+      const locale = localeFromQuery(req.query);
+      const systemInstruction = buildEditSystemInstruction(nowLocal, currentContext, locale);
       const audioBase64 = audioBuffer.toString('base64');
       const abortController = new AbortController();
       const timeoutHandle = setTimeout(() => abortController.abort(), geminiTimeoutMs);

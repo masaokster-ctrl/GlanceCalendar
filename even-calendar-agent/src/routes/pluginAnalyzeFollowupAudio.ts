@@ -17,6 +17,7 @@ import { buildFollowupSystemInstruction } from '../gemini/followupSystemInstruct
 import { parseFollowupFragmentResult, type FollowupResult } from '../gemini/followupResultSchema.js';
 import { resolveCandidate, type CandidateFragments } from '../gemini/candidateFragments.js';
 import type { PluginEventCandidateTiming } from '../firestore/models.js';
+import { localeFromQuery } from '../i18n/locale.js';
 
 const REQUIRED_SCOPE = 'audio:analyze';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -176,6 +177,7 @@ export function createPluginAnalyzeFollowupAudioRouter(deps: PluginAnalyzeFollow
       }
 
       const nowLocal = nowLocalIsoTokyo(deps.clock);
+      const locale = localeFromQuery(req.query);
       const missingField = conversationDoc.missingField ?? 'title';
       const systemInstruction = buildFollowupSystemInstruction({
         nowLocalIso: nowLocal,
@@ -183,6 +185,7 @@ export function createPluginAnalyzeFollowupAudioRouter(deps: PluginAnalyzeFollow
         missingField,
         turnCount: conversationDoc.turnCount,
         maxTurns: MAX_TURNS,
+        locale,
       });
       const audioBase64 = audioBuffer.toString('base64');
       const abortController = new AbortController();
@@ -237,7 +240,7 @@ export function createPluginAnalyzeFollowupAudioRouter(deps: PluginAnalyzeFollow
         endDateLocal: conversationDoc.partialCandidate.endDateLocal,
         allDaySignal: conversationDoc.partialCandidate.allDaySignal,
       };
-      const resolved = resolveCandidate(existingFragments, parsed, nowLocal);
+      const resolved = resolveCandidate(existingFragments, parsed, nowLocal, locale);
       const result: FollowupResult = {
         schemaVersion: '1',
         resultType: resolved.resultType,

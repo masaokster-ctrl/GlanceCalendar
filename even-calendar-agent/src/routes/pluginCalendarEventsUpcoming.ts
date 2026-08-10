@@ -10,6 +10,7 @@ import type { PluginRateLimitRepository } from '../firestore/pluginRateLimitRepo
 import type { CalendarService } from '../calendar/calendarService.js';
 import type { CalendarEventDetail } from '../calendar/calendarClient.js';
 import { toEventResponseItem } from '../calendar/eventResponseMapping.js';
+import { localeFromQuery } from '../i18n/locale.js';
 import { resolvePrincipal } from '../product/principal.js';
 import type { ProductInstallationRepository } from '../product/productInstallationRepository.js';
 import { classifyProductCalendarError } from '../product/productCalendarErrorClassifier.js';
@@ -81,7 +82,7 @@ export function createPluginCalendarEventsUpcomingRouter(deps: PluginCalendarEve
       return;
     }
 
-    const allowedQueryKeys = new Set(['limit']);
+    const allowedQueryKeys = new Set(['limit', 'locale']);
     if (Object.keys(req.query).some((key) => !allowedQueryKeys.has(key))) {
       errorJson(res, 400, 'Only the limit query parameter is supported');
       return;
@@ -101,6 +102,7 @@ export function createPluginCalendarEventsUpcomingRouter(deps: PluginCalendarEve
       }
       limit = parsedLimit;
     }
+    const locale = localeFromQuery(req.query);
 
     const now = deps.clock.now();
     const rateLimitResult = await deps.rateLimitRepo.consume({
@@ -153,7 +155,7 @@ export function createPluginCalendarEventsUpcomingRouter(deps: PluginCalendarEve
     }
     clearTimeout(timeoutHandle);
 
-    const events = upcomingEvents.events.map(toEventResponseItem);
+    const events = upcomingEvents.events.map((event) => toEventResponseItem(event, locale));
     const allDayCount = events.filter((event) => event.allDay).length;
     const timedCount = events.length - allDayCount;
 

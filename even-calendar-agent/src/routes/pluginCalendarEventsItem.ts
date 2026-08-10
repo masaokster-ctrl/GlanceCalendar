@@ -9,6 +9,7 @@ import type { IdempotencyRepository } from '../firestore/idempotencyRepository.j
 import type { CalendarService } from '../calendar/calendarService.js';
 import type { CalendarEventFullDetail } from '../calendar/calendarClient.js';
 import { toEventDetailResponseItem } from '../calendar/eventResponseMapping.js';
+import { localeFromQuery } from '../i18n/locale.js';
 import { resolvePrincipal } from '../product/principal.js';
 import type { ProductInstallationRepository } from '../product/productInstallationRepository.js';
 import { classifyProductCalendarError } from '../product/productCalendarErrorClassifier.js';
@@ -104,6 +105,10 @@ function parseUpdateBody(body: UpdateEventBody | undefined): { idempotencyKey: s
     fields.endDateExclusive = body.endDateExclusive;
   }
 
+  // locale を fields に入れてはならない。入れると (a) locale だけの PATCH が空 PATCH として検出
+  // されなくなり、(b) 逆に locale を fields の外で必須化すると locale 単独 PATCH が誤って 400 に
+  // なる。将来 PATCH レスポンスのローカライズが必要になったら、戻り値を
+  // {idempotencyKey, fields, locale} に拡張し、locale はこの空チェックより前に別変数へ退避すること。
   if (Object.keys(fields).length === 0) return null;
 
   return { idempotencyKey: body.idempotencyKey, fields };
@@ -207,7 +212,8 @@ export function createPluginCalendarEventsItemRouter(deps: PluginCalendarEventsI
       return;
     }
 
-    const event = toEventDetailResponseItem(detail);
+    const locale = localeFromQuery(req.query);
+    const event = toEventDetailResponseItem(detail, locale);
     logSafeEvent({
       event: 'plugin_calendar_event_detail_succeeded',
       sessionHashPrefix: shortHashPrefix(tokenHash),

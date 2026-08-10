@@ -1,3 +1,5 @@
+import type { Locale } from './i18n/locale'
+
 const DEFAULT_TIMEOUT_MS = 35_000
 
 export type RegisterEventOutcome =
@@ -20,6 +22,8 @@ interface RegisterEventParamsBase {
   timeZone: string
   signal: AbortSignal
   timeoutMs?: number
+  /** 未指定時は従来と完全同一のbody(JSON.stringifyがundefinedキーを省略する)。正規化済みの'ja'|'en'のみを渡すこと。 */
+  locale?: Locale
 }
 
 /**
@@ -71,6 +75,7 @@ export async function registerCalendarEvent(params: RegisterEventParams): Promis
               allDay: true,
               startDate: params.startDate,
               endDateExclusive: params.endDateExclusive,
+              locale: params.locale,
             }
           : {
               schemaVersion: '1',
@@ -80,6 +85,7 @@ export async function registerCalendarEvent(params: RegisterEventParams): Promis
               allDay: false,
               startLocal: params.startLocal,
               endLocal: params.endLocal,
+              locale: params.locale,
             },
       ),
       signal: fetchController.signal,

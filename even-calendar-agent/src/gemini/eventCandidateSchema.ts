@@ -1,6 +1,7 @@
 import { Type } from '@google/genai';
 import type { Schema } from '@google/genai';
 import { parseGeminiFragmentOutput, type ClarificationField, type GeminiFragmentOutput } from './candidateFragments.js';
+import { ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION } from './allDayVocabulary.js';
 
 export type ResultType = 'event_candidate' | 'needs_clarification' | 'not_calendar_request';
 export type { ClarificationField };
@@ -49,10 +50,7 @@ export const EVENT_CANDIDATE_RESPONSE_SCHEMA: Schema = {
       type: Type.STRING,
       enum: ['all_day', 'timed'],
       nullable: true,
-      description:
-        "終日/時刻明言の手がかり。「終日」「一日中」「有給」「休暇」「休み」等、時刻を示さず1日(または複数日)全体を" +
-        "指す語があれば'all_day'。開始時刻が明確に発話されていれば'timed'(この場合は必ずstartTimeLocalも設定する)。" +
-        'どちらの手がかりも無ければnull。',
+      description: ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION,
     },
     timeZone: { type: Type.STRING, enum: ['Asia/Tokyo'] },
     explicitCorrection: { type: Type.BOOLEAN },

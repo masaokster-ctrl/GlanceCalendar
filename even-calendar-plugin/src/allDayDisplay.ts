@@ -3,6 +3,9 @@
 // 各画面で個別に「-1日」計算を書かないこと(1日ズレのバグを防ぐための唯一の変換点)。
 // UTC基準のカレンダー日算術(DSTの影響を受けない)で、文字列の直接加工や固定ミリ秒演算は行わない。
 
+import { formatAllDayRangeEn, formatAllDaySingleEn, monthDayEn } from './i18n/dateFormats'
+import { getActiveLocale } from './i18n/locale'
+
 const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function pad2(n: number): string {
@@ -33,8 +36,16 @@ export function inclusiveEndDate(endDateExclusive: string): string {
  * 複数日は「終日 M/D〜M/D」(排他的終了日をそのまま最終日として出さない)。
  */
 export function formatAllDayWhen(startDate: string, endDateExclusive: string | null): string {
+  // ロケール分岐は必ずinclusiveEndDate()による変換の「後」に置く。EN用の並行変換関数を作らないことが
+  // 1日ズレ(off-by-one)を防ぐ唯一の担保であり、この順序を崩してはならない。
   const endInclusive = endDateExclusive ? inclusiveEndDate(endDateExclusive) : startDate
-  if (endInclusive <= startDate) return `終日 ${monthDay(startDate)}`
+  const isSingleDay = endInclusive <= startDate
+
+  if (getActiveLocale() === 'en') {
+    return isSingleDay ? formatAllDaySingleEn(monthDayEn(startDate)) : formatAllDayRangeEn(monthDayEn(startDate), monthDayEn(endInclusive))
+  }
+
+  if (isSingleDay) return `終日 ${monthDay(startDate)}`
   return `終日 ${monthDay(startDate)}〜${monthDay(endInclusive)}`
 }
 

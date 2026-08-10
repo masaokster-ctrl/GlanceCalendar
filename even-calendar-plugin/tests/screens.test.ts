@@ -36,15 +36,26 @@ const ALL_SCREEN_TEXTS = [
 ]
 
 describe('screen text builders', () => {
-  it('home menu holds 4 items internally: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定 (昨日の予定 removed)', () => {
-    expect(screens.HOME_MENU_ITEM_COUNT).toBe(4)
-    expect(screens.HOME_MENU_ITEMS).toEqual(['予定を登録', '直近5件の予定', '今日の予定', '明日の予定'])
+  it('home menu holds 5 items internally: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定, Googleカレンダーを再接続 (昨日の予定 removed)', () => {
+    expect(screens.HOME_MENU_ITEM_COUNT).toBe(5)
+    expect(screens.HOME_MENU_ITEMS).toEqual([
+      '予定を登録',
+      '直近5件の予定',
+      '今日の予定',
+      '明日の予定',
+      'Googleカレンダーを再接続',
+    ])
     expect(screens.HOME_MENU_ITEMS as readonly string[]).not.toContain('昨日の予定')
   })
 
-  it('home menu shows the app name, a N/4 position indicator, and only 3 visible items at once', () => {
+  it('Phase 2K: existing first 4 items keep their original order (only the 5th item was appended)', () => {
+    expect(screens.HOME_MENU_ITEMS.slice(0, 4)).toEqual(['予定を登録', '直近5件の予定', '今日の予定', '明日の予定'])
+    expect(screens.HOME_MENU_ITEMS[4]).toBe('Googleカレンダーを再接続')
+  })
+
+  it('home menu shows the app name, a N/5 position indicator, and only 3 visible items at once', () => {
     const text = screens.homeScreenText(0)
-    expect(text).toContain('Calendar with Gemini 1/4')
+    expect(text).toContain('Calendar with Gemini 1/5')
     expect(text).toContain('> 予定を登録')
     expect(text).toContain('  直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -54,7 +65,7 @@ describe('screen text builders', () => {
 
   it('selection 0 shows items [予定を登録, 直近5件の予定, 今日の予定] with the cursor on 予定を登録', () => {
     const text = screens.homeScreenText(0)
-    expect(text).toContain('Calendar with Gemini 1/4')
+    expect(text).toContain('Calendar with Gemini 1/5')
     expect(text).toContain('> 予定を登録')
     expect(text).toContain('  直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -63,7 +74,7 @@ describe('screen text builders', () => {
 
   it('selection 1 shows the same window [予定を登録, 直近5件の予定, 今日の予定] with the cursor on 直近5件の予定', () => {
     const text = screens.homeScreenText(1)
-    expect(text).toContain('Calendar with Gemini 2/4')
+    expect(text).toContain('Calendar with Gemini 2/5')
     expect(text).toContain('  予定を登録')
     expect(text).toContain('> 直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -72,20 +83,31 @@ describe('screen text builders', () => {
 
   it('selection 2 shifts the window to [直近5件の予定, 今日の予定, 明日の予定] with the cursor on 今日の予定', () => {
     const text = screens.homeScreenText(2)
-    expect(text).toContain('Calendar with Gemini 3/4')
+    expect(text).toContain('Calendar with Gemini 3/5')
     expect(text).not.toContain('予定を登録')
     expect(text).toContain('  直近5件の予定')
     expect(text).toContain('> 今日の予定')
     expect(text).toContain('  明日の予定')
   })
 
-  it('selection 3 shows the same window [直近5件の予定, 今日の予定, 明日の予定] with the cursor on 明日の予定', () => {
+  it('selection 3 shifts the window to [今日の予定, 明日の予定, Googleカレンダーを再接続] with the cursor on 明日の予定', () => {
     const text = screens.homeScreenText(3)
-    expect(text).toContain('Calendar with Gemini 4/4')
+    expect(text).toContain('Calendar with Gemini 4/5')
     expect(text).not.toContain('予定を登録')
-    expect(text).toContain('  直近5件の予定')
+    expect(text).not.toContain('直近5件の予定')
     expect(text).toContain('  今日の予定')
     expect(text).toContain('> 明日の予定')
+    expect(text).toContain('  Googleカレンダーを再接続')
+  })
+
+  it('selection 4 shows the same window [今日の予定, 明日の予定, Googleカレンダーを再接続] with the cursor on Googleカレンダーを再接続', () => {
+    const text = screens.homeScreenText(4)
+    expect(text).toContain('Calendar with Gemini 5/5')
+    expect(text).not.toContain('予定を登録')
+    expect(text).not.toContain('直近5件の予定')
+    expect(text).toContain('  今日の予定')
+    expect(text).toContain('  明日の予定')
+    expect(text).toContain('> Googleカレンダーを再接続')
   })
 
   it('always shows exactly 3 menu item lines regardless of selection (no native scroll needed)', () => {

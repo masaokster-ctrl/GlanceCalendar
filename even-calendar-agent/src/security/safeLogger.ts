@@ -1,3 +1,5 @@
+import type { SupportedLocale } from '../i18n/locale.js';
+
 export interface SafeLogFields {
   event: string;
   level?: 'info' | 'error';
@@ -58,6 +60,8 @@ export interface SafeLogFields {
   // Google eventId・idempotencyKeyそのもの・予定内容は含まない(ハッシュprefixのみ)。
   eventIdHashPrefix?: string;
   idempotencyKeyHashPrefix?: string;
+  // locale は低機微(ja/enの2値のみ)なのでログ可。生のクライアント入力文字列そのものは含まない。
+  locale?: SupportedLocale;
 }
 
 /**

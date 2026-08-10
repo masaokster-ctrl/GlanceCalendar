@@ -374,6 +374,174 @@ describe('createApp — Phase 2H pairing flow', () => {
   })
 })
 
+describe('createApp — Phase 2K: reconnect from the home menu (5th item)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function swipeDown(): { textEvent: { eventType: OsEventTypeList } } {
+    return { textEvent: { eventType: OsEventTypeList.SCROLL_BOTTOM_EVENT } }
+  }
+
+  async function selectHomeMenu(bridge: FakeEvenAppBridge, index: number): Promise<void> {
+    for (let i = 0; i < index; i += 1) {
+      bridge.emit(swipeDown())
+      await flushMicrotasks()
+    }
+  }
+
+  async function startFromHomeWithValidCredential(overrides: Partial<AppDeps> = {}): Promise<{ bridge: FakeEvenAppBridge; app: ReturnType<typeof createApp> }> {
+    stubHealthyFetch()
+    const bridge = new FakeEvenAppBridge()
+    const tokenStore = new BridgeProductTokenStore(bridge)
+    await tokenStore.save({
+      refreshToken: 'rt-1',
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    })
+    const app = createApp(bridge, productDeps({ tokenStore, ...overrides }))
+    await app.start()
+    expect(app.getScreen()).toBe('home')
+    return { bridge, app }
+  }
+
+  it('selecting the 5th home item (Googleカレンダーを再接続) calls startPairingFlow and shows the pairing code screen', async () => {
+    const callState = { count: 0 }
+    const startPairingFn = async (): Promise<StartPairingOutcome> => {
+      callState.count += 1
+      return {
+        kind: 'success',
+        pairingId: 'pairing-1',
+        userCode: 'ABCD-EFGH',
+        verificationUrl: 'backend.test/connect',
+        expiresInSeconds: 600,
+        pollIntervalSeconds: 3,
+      }
+    }
+    const { bridge, app } = await startFromHomeWithValidCredential({ startPairingFn })
+
+    await selectHomeMenu(bridge, 4) // -> 5番目: Googleカレンダーを再接続
+    expect(app.getHomeMenuIndex()).toBe(4)
+    bridge.emit(press())
+    await flushMicrotasks()
+
+    expect(callState.count).toBe(1)
+    expect(app.getScreen()).toBe('pairing')
+    expect(bridge.lastTextContent()).toContain('backend.test/connect')
+    expect(bridge.lastTextContent()).toContain('ABCD-EFGH')
+    expect(app.getPairingContext().state).toBe('waitingApproval')
+  })
+
+  it('never calls a Calendar/Gemini client function when starting reconnect from the home menu', async () => {
+    const dayCalls: FetchDayEventsParams[] = []
+    const { fn: startPairingFn } = fakeStartPairing({
+      kind: 'success',
+      pairingId: 'pairing-1',
+      userCode: 'ABCD-EFGH',
+      verificationUrl: 'backend.test/connect',
+      expiresInSeconds: 600,
+      pollIntervalSeconds: 3,
+    })
+    const { bridge } = await startFromHomeWithValidCredential({
+      startPairingFn,
+      fetchDayEventsFn: async (p): Promise<FetchDayEventsOutcome> => {
+        dayCalls.push(p)
+        return { kind: 'failed' }
+      },
+    })
+
+    await selectHomeMenu(bridge, 4)
+    bridge.emit(press())
+    await flushMicrotasks()
+
+    expect(dayCalls).toHaveLength(0)
+  })
+
+  it('shows the existing pairingError screen (reused, not a new screen) when starting the pairing fails from the home menu', async () => {
+    const { fn: startPairingFn } = fakeStartPairing({ kind: 'network_error' })
+    const { bridge, app } = await startFromHomeWithValidCredential({ startPairingFn })
+
+    await selectHomeMenu(bridge, 4)
+    bridge.emit(press())
+    await flushMicrotasks()
+
+    expect(app.getScreen()).toBe('pairingError')
+  })
+
+  it('shows the existing pairingSuccess screen once a reconnect started from the home menu is approved and exchanged', async () => {
+    vi.useFakeTimers()
+    const { fn: startPairingFn } = fakeStartPairing({
+      kind: 'success',
+      pairingId: 'pairing-1',
+      userCode: 'ABCD-EFGH',
+      verificationUrl: 'backend.test/connect',
+      expiresInSeconds: 600,
+      pollIntervalSeconds: 3,
+    })
+    let pollCount = 0
+    const checkPairingStatusFn = async (): Promise<CheckPairingStatusOutcome> => {
+      pollCount += 1
+      return { kind: 'success', status: pollCount < 2 ? 'pending' : 'approved' }
+    }
+    const exchangePairingFn = async (): Promise<ExchangePairingOutcome> => ({
+      kind: 'success',
+      accessToken: 'new-access-token',
+      accessTokenExpiresInSeconds: 900,
+      refreshToken: 'new-refresh-token',
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      scopes: ['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read'],
+    })
+    const { bridge, app } = await startFromHomeWithValidCredential({ startPairingFn, checkPairingStatusFn, exchangePairingFn })
+
+    await selectHomeMenu(bridge, 4)
+    bridge.emit(press())
+    await flushMicrotasks()
+    expect(app.getScreen()).toBe('pairing')
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushMicrotasks()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushMicrotasks()
+
+    expect(app.getScreen()).toBe('pairingSuccess')
+    vi.useRealTimers()
+  })
+
+  it('pressing the pairingSuccess screen returns to home (existing behavior, unchanged)', async () => {
+    const { fn: startPairingFn } = fakeStartPairing({
+      kind: 'success',
+      pairingId: 'pairing-1',
+      userCode: 'ABCD-EFGH',
+      verificationUrl: 'backend.test/connect',
+      expiresInSeconds: 600,
+      pollIntervalSeconds: 3,
+    })
+    const exchangePairingFn = async (): Promise<ExchangePairingOutcome> => ({
+      kind: 'success',
+      accessToken: 'new-access-token',
+      accessTokenExpiresInSeconds: 900,
+      refreshToken: 'new-refresh-token',
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      scopes: ['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read'],
+    })
+    const checkPairingStatusFn = async (): Promise<CheckPairingStatusOutcome> => ({ kind: 'success', status: 'approved' })
+    vi.useFakeTimers()
+    const { bridge, app } = await startFromHomeWithValidCredential({ startPairingFn, checkPairingStatusFn, exchangePairingFn })
+
+    await selectHomeMenu(bridge, 4)
+    bridge.emit(press())
+    await flushMicrotasks()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushMicrotasks()
+    expect(app.getScreen()).toBe('pairingSuccess')
+
+    bridge.emit(press())
+    await flushMicrotasks()
+    expect(app.getScreen()).toBe('home')
+    expect(app.getHomeMenuIndex()).toBe(0)
+    vi.useRealTimers()
+  })
+})
+
 describe('createApp — Phase 2H product access-token usage and auth retry', () => {
   afterEach(() => {
     vi.unstubAllGlobals()

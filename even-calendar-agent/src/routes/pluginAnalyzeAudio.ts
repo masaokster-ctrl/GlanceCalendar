@@ -19,6 +19,7 @@ import { buildSystemInstruction } from '../gemini/systemInstruction.js';
 import { parseInitialFragmentResult, type EventCandidateResult, type ResultType } from '../gemini/eventCandidateSchema.js';
 import { resolveCandidate, BLANK_FRAGMENTS } from '../gemini/candidateFragments.js';
 import type { PluginEventCandidateTiming } from '../firestore/models.js';
+import { localeFromQuery } from '../i18n/locale.js';
 
 const REQUIRED_SCOPE = 'audio:analyze';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -160,7 +161,8 @@ export function createPluginAnalyzeAudioRouter(deps: PluginAnalyzeAudioRouterDep
       }
 
       const nowLocal = nowLocalIsoTokyo(deps.clock);
-      const systemInstruction = buildSystemInstruction(nowLocal);
+      const locale = localeFromQuery(req.query);
+      const systemInstruction = buildSystemInstruction(nowLocal, locale);
       const audioBase64 = audioBuffer.toString('base64');
       const abortController = new AbortController();
       const timeoutHandle = setTimeout(() => abortController.abort(), geminiTimeoutMs);
@@ -206,7 +208,7 @@ export function createPluginAnalyzeAudioRouter(deps: PluginAnalyzeAudioRouterDep
 
       // 初回発話には既存fragmentsがまだ無いため空状態からmergeする。resultTypeは
       // parseInitialFragmentResultの時点で'cancelled'を許可していないため'as ResultType'は安全。
-      const resolved = resolveCandidate(BLANK_FRAGMENTS, parsed, nowLocal);
+      const resolved = resolveCandidate(BLANK_FRAGMENTS, parsed, nowLocal, locale);
       const result: EventCandidateResult = {
         schemaVersion: '1',
         resultType: resolved.resultType as ResultType,
@@ -296,6 +298,7 @@ export function createPluginAnalyzeAudioRouter(deps: PluginAnalyzeAudioRouterDep
         receivedBytes: audioBuffer.byteLength,
         estimatedDurationMs: wavCheck.estimatedDurationMs,
         resultType: result.resultType,
+        locale,
         geminiModel: deps.geminiModel,
         vertexLocation: deps.vertexLocation,
         latencyMs: Date.now() - startedAt,

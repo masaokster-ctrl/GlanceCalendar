@@ -3,6 +3,14 @@
 // 画面表示にもbridge.setLocalStorageにも一切出さないこと(呼び出し側の責務)。
 import { truncateForDisplay } from './screens'
 import { formatAllDayWhen, monthDay } from './allDayDisplay'
+import {
+  formatCrossDayRangeEn,
+  formatEndOnlyEn,
+  formatStartOnlyEn,
+  formatTimeRangeEn,
+  monthDayEn,
+} from './i18n/dateFormats'
+import { getActiveLocale, type Locale } from './i18n/locale'
 
 export interface EventAttendee {
   email: string
@@ -115,25 +123,44 @@ export function formatEventDetailWhen(detail: EventDetail): string | null {
   }
 
   if (!detail.startLocal && !detail.endLocal) return null
+  const isEn = getActiveLocale() === 'en'
+
   if (detail.startLocal && detail.endLocal) {
-    const sameDay = detail.startLocal.slice(0, 10) === detail.endLocal.slice(0, 10)
+    const startDate = detail.startLocal.slice(0, 10)
+    const endDate = detail.endLocal.slice(0, 10)
+    const sameDay = startDate === endDate
     const startTime = detail.startLocal.slice(11, 16)
     const endTime = detail.endLocal.slice(11, 16)
     if (sameDay) {
-      return `${monthDay(detail.startLocal.slice(0, 10))} ${startTime}-${endTime}`
+      return isEn ? formatTimeRangeEn(monthDayEn(startDate), startTime, endTime) : `${monthDay(startDate)} ${startTime}-${endTime}`
     }
-    return `${monthDay(detail.startLocal.slice(0, 10))} ${startTime}〜${monthDay(detail.endLocal.slice(0, 10))} ${endTime}`
+    return isEn
+      ? formatCrossDayRangeEn(monthDayEn(startDate), startTime, monthDayEn(endDate), endTime)
+      : `${monthDay(startDate)} ${startTime}〜${monthDay(endDate)} ${endTime}`
   }
   if (detail.startLocal) {
-    return `${monthDay(detail.startLocal.slice(0, 10))} ${detail.startLocal.slice(11, 16)}〜`
+    const date = detail.startLocal.slice(0, 10)
+    const time = detail.startLocal.slice(11, 16)
+    return isEn ? formatStartOnlyEn(monthDayEn(date), time) : `${monthDay(date)} ${time}〜`
   }
   const end = detail.endLocal as string
-  return `〜${monthDay(end.slice(0, 10))} ${end.slice(11, 16)}`
+  const endDate = end.slice(0, 10)
+  const endTime = end.slice(11, 16)
+  return isEn ? formatEndOnlyEn(monthDayEn(endDate), endTime) : `〜${monthDay(endDate)} ${endTime}`
+}
+
+const DETAIL_FIELD_LABELS: Record<Locale, { location: string; note: string; attendees: string; meetingUrl: string }> = {
+  ja: { location: '場所', note: 'メモ', attendees: '参加者', meetingUrl: '会議URL' },
+  en: { location: 'Location', note: 'Note', attendees: 'Attendees', meetingUrl: 'Meeting URL' },
+}
+
+function detailFieldLabels(): { location: string; note: string; attendees: string; meetingUrl: string } {
+  return DETAIL_FIELD_LABELS[getActiveLocale()] ?? DETAIL_FIELD_LABELS.ja
 }
 
 function formatAttendeesLine(attendees: EventAttendee[]): string {
   const names = attendees.map((a) => a.displayName ?? a.email)
-  return `参加者: ${names.join(', ')}`
+  return `${detailFieldLabels().attendees}: ${names.join(', ')}`
 }
 
 /**
@@ -146,12 +173,13 @@ export function buildEventDetailLines(detail: EventDetail): string[] {
   const when = formatEventDetailWhen(detail)
   if (when) lines.push(when)
 
-  if (detail.location) lines.push(truncateForDisplay(`場所: ${detail.location}`, FIELD_DISPLAY_MAX_LENGTH))
-  if (detail.description) lines.push(truncateForDisplay(`メモ: ${detail.description}`, FIELD_DISPLAY_MAX_LENGTH))
+  const labels = detailFieldLabels()
+  if (detail.location) lines.push(truncateForDisplay(`${labels.location}: ${detail.location}`, FIELD_DISPLAY_MAX_LENGTH))
+  if (detail.description) lines.push(truncateForDisplay(`${labels.note}: ${detail.description}`, FIELD_DISPLAY_MAX_LENGTH))
   if (detail.attendees && detail.attendees.length > 0) {
     lines.push(truncateForDisplay(formatAttendeesLine(detail.attendees), FIELD_DISPLAY_MAX_LENGTH))
   }
-  if (detail.meetingUrl) lines.push(truncateForDisplay(`会議URL: ${detail.meetingUrl}`, FIELD_DISPLAY_MAX_LENGTH))
+  if (detail.meetingUrl) lines.push(truncateForDisplay(`${labels.meetingUrl}: ${detail.meetingUrl}`, FIELD_DISPLAY_MAX_LENGTH))
 
   return lines
 }

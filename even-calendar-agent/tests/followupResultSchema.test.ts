@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseFollowupFragmentResult } from '../src/gemini/followupResultSchema.js';
+import { parseFollowupFragmentResult, FOLLOWUP_RESULT_RESPONSE_SCHEMA } from '../src/gemini/followupResultSchema.js';
+import { ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION } from '../src/gemini/allDayVocabulary.js';
 
 function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -67,5 +68,12 @@ describe('parseFollowupFragmentResult', () => {
     const result = parseFollowupFragmentResult(validPayload({ transcription: 'something' }));
     expect(result).not.toBeNull();
     expect(result).not.toHaveProperty('transcription');
+  });
+});
+
+describe('FOLLOWUP_RESULT_RESPONSE_SCHEMA: allDaySignal語彙の集約(設計§3.5)', () => {
+  it('allDaySignal.descriptionは共有定数ALL_DAY_SIGNAL_SCHEMA_DESCRIPTIONと同一', () => {
+    const props = FOLLOWUP_RESULT_RESPONSE_SCHEMA.properties as Record<string, { description?: string }>;
+    expect(props.allDaySignal?.description).toBe(ALL_DAY_SIGNAL_SCHEMA_DESCRIPTION);
   });
 });

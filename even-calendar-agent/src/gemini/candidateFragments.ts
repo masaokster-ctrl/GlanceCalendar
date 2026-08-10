@@ -1,4 +1,5 @@
 import { DateTime } from 'luxon';
+import type { SupportedLocale } from '../i18n/locale.js';
 
 export type ClarificationField = 'title' | 'date' | 'start_time' | 'duration' | 'multiple';
 export type ResolvedResultType = 'event_candidate' | 'needs_clarification' | 'cancelled' | 'not_calendar_request';
@@ -18,6 +19,27 @@ export const MAX_TITLE_LENGTH = 200;
 export const MAX_QUESTION_LENGTH = 200;
 export const MAX_ASSUMPTIONS = 10;
 export const MAX_ASSUMPTION_LENGTH = 100;
+
+/**
+ * サーバー側フォールバックの3本(設計§4.2 案(A))。locale省略時・'ja'指定時は既存の日本語文言と
+ * 一字一句同じでなければならない(既存呼び出し元・既存テストとの後方互換)。英語3本は60字の
+ * 検証済みハードリミット(even-calendar-plugin/src/screens.ts MAX_DISPLAY_LENGTH)以内(34/34/40字)。
+ * 60を超えなければ良く、44字は助言的ターゲットに過ぎない(バリデーションエラー化しない)。
+ */
+const RECURRING_UNSUPPORTED_MESSAGE: Record<SupportedLocale, string> = {
+  ja: '複数日にわたる繰り返し予定には対応していません',
+  en: "Recurring events aren't supported.",
+};
+
+const DATE_UNRESOLVABLE_MESSAGE: Record<SupportedLocale, string> = {
+  ja: '日付を確認できませんでした。もう一度お試しください',
+  en: "Couldn't read the date. Try again.",
+};
+
+const PAST_DATETIME_MESSAGE: Record<SupportedLocale, string> = {
+  ja: '過去の日時のようです。もう一度お試しください',
+  en: 'That time has already passed. Try again.',
+};
 
 /**
  * 日付・時刻・所要時間を独立して保持する中間状態(Firestoreのpartial candidateと同じ形)。
@@ -275,8 +297,17 @@ function unresolvedResult(
  * 自動的にどちらか決めず、start_timeの再確認へ回す(設計要件3・japanese-date-rangeスキル参照)。
  * 「Xから Yまで毎日10時」のような繰り返し予定が複数日の範囲と時刻を同時に含む場合は、単一の
  * 終日/通常予定へ誤って潰さず、未対応としてclarificationField="multiple"へ倒す(設計要件6)。
+ *
+ * localeは省略可能な出力言語ヒント(既定'ja')。サーバー側フォールバック文言3本
+ * (繰り返し未対応・日付解決失敗・過去日時)の言語選択にのみ使う。省略時・'ja'時は
+ * 既存の日本語文言と一字一句同じになる(後方互換)。
  */
-export function resolveCandidate(existing: CandidateFragments, incoming: GeminiFragmentOutput, nowLocal: string): ResolvedCandidate {
+export function resolveCandidate(
+  existing: CandidateFragments,
+  incoming: GeminiFragmentOutput,
+  nowLocal: string,
+  locale: SupportedLocale = 'ja',
+): ResolvedCandidate {
   if (incoming.resultType === 'cancelled' || incoming.resultType === 'not_calendar_request') {
     return unresolvedResult(existing, incoming.resultType, null, null, incoming.assumptions);
   }
@@ -301,7 +332,7 @@ export function resolveCandidate(existing: CandidateFragments, incoming: GeminiF
   // 「8月3日から8月5日まで毎日10時に会議」のような繰り返し予定の誤変換を防ぐ: 複数日の範囲と
   // 時刻の両方が同時に指定された場合は、単一の終日/通常予定へ潰さず未対応として明確化を求める。
   if (merged.startTimeLocal !== null && isRangeGiven) {
-    return unresolvedResult(merged, 'needs_clarification', 'multiple', '複数日にわたる繰り返し予定には対応していません', incoming.assumptions);
+    return unresolvedResult(merged, 'needs_clarification', 'multiple', RECURRING_UNSUPPORTED_MESSAGE[locale], incoming.assumptions);
   }
 
   const isAllDay = merged.startTimeLocal === null && (merged.allDaySignal === 'all_day' || isRangeGiven);
@@ -313,7 +344,7 @@ export function resolveCandidate(existing: CandidateFragments, incoming: GeminiF
         { ...merged, dateLocal: null, endDateLocal: null },
         'needs_clarification',
         'date',
-        '日付を確認できませんでした。もう一度お試しください',
+        DATE_UNRESOLVABLE_MESSAGE[locale],
         incoming.assumptions,
       );
     }
@@ -355,7 +386,7 @@ export function resolveCandidate(existing: CandidateFragments, incoming: GeminiF
       { ...finalFragments, dateLocal: null },
       'needs_clarification',
       'date',
-      '過去の日時のようです。もう一度お試しください',
+      PAST_DATETIME_MESSAGE[locale],
       assumptions,
     );
   }

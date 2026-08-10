@@ -3,6 +3,13 @@
 // (旧eventKeyから改称。ランダムな使い捨て値ではなく実IDのため、常にメモリ上にのみ保持し、
 // 画面表示にもbridge.setLocalStorageにも一切出さないこと)。description等はこの型に存在しない。
 import { truncateForDisplay } from './screens'
+import {
+  formatAllDayLinePrefixEn,
+  formatContinuedFromPrevDayEn,
+  formatContinuesToNextDayEn,
+  formatOngoingLinePrefixEn,
+} from './i18n/dateFormats'
+import { getActiveLocale } from './i18n/locale'
 
 export type DayKind = 'today' | 'tomorrow'
 
@@ -106,9 +113,10 @@ function datePart(localDateTime: string): string {
  */
 export function formatDayEventLine(event: DayEventItem, dateLocal: string): string {
   const title = truncateForDisplay(event.title, TITLE_DISPLAY_MAX_LENGTH)
+  const isEn = getActiveLocale() === 'en'
 
   if (event.allDay) {
-    return `終日 ${title}`
+    return `${isEn ? formatAllDayLinePrefixEn() : '終日'} ${title}`
   }
 
   if (!event.startLocal || !event.endLocal) {
@@ -119,13 +127,15 @@ export function formatDayEventLine(event: DayEventItem, dateLocal: string): stri
   const endsAfterDay = datePart(event.endLocal) > dateLocal
 
   if (startsBeforeDay && endsAfterDay) {
-    return `継続中 ${title}`
+    return `${isEn ? formatOngoingLinePrefixEn() : '継続中'} ${title}`
   }
   if (startsBeforeDay) {
-    return `前日から-${timePart(event.endLocal)} ${title}`
+    const prefix = isEn ? formatContinuedFromPrevDayEn(timePart(event.endLocal)) : `前日から-${timePart(event.endLocal)}`
+    return `${prefix} ${title}`
   }
   if (endsAfterDay) {
-    return `${timePart(event.startLocal)}-翌日へ ${title}`
+    const prefix = isEn ? formatContinuesToNextDayEn(timePart(event.startLocal)) : `${timePart(event.startLocal)}-翌日へ`
+    return `${prefix} ${title}`
   }
   return `${timePart(event.startLocal)}-${timePart(event.endLocal)} ${title}`
 }

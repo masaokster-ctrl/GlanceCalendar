@@ -573,14 +573,19 @@ describe('createApp', () => {
     expect(app.getHomeMenuIndex()).toBe(3)
     expect(bridge.lastTextContent()).toContain('> 明日の予定')
 
+    bridge.emit(swipeDown())
+    await flushMicrotasks()
+    expect(app.getHomeMenuIndex()).toBe(4)
+    expect(bridge.lastTextContent()).toContain('> Googleカレンダーを再接続')
+
     // 末尾でこれ以上下へは進まない(クランプ)
     bridge.emit(swipeDown())
     await flushMicrotasks()
-    expect(app.getHomeMenuIndex()).toBe(3)
+    expect(app.getHomeMenuIndex()).toBe(4)
 
     bridge.emit(swipeUp())
     await flushMicrotasks()
-    expect(app.getHomeMenuIndex()).toBe(2)
+    expect(app.getHomeMenuIndex()).toBe(3)
   })
 
   it('does not move the selection above the first item', async () => {
@@ -2835,7 +2840,7 @@ describe('createApp', () => {
       }
     }
 
-    it('home menu holds exactly 4 items in order: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定 (昨日の予定 removed)', async () => {
+    it('home menu holds exactly 5 items in order: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定, Googleカレンダーを再接続 (昨日の予定 removed)', async () => {
       stubHealthyFetch()
       const bridge = new FakeEvenAppBridge()
       const app = createApp(bridge)
@@ -2843,7 +2848,7 @@ describe('createApp', () => {
       const payload = bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }
       const text = payload.textObject[0]?.content ?? ''
       expect(text).not.toContain('昨日の予定')
-      expect(text).toContain('Calendar with Gemini 1/4')
+      expect(text).toContain('Calendar with Gemini 1/5')
       const order = ['予定を登録', '直近5件の予定', '今日の予定']
       const indices = order.map((item) => text.indexOf(item))
       expect(indices.every((i) => i >= 0)).toBe(true)
@@ -2851,7 +2856,43 @@ describe('createApp', () => {
       expect(app.getHomeMenuIndex()).toBe(0)
     })
 
-    it('shows only a 3-item window at a time as selection moves, never all 4 at once, with a correct N/4 indicator', async () => {
+    it('Phase 2K: existing 4 items (予定を登録/直近5件の予定/今日の予定/明日の予定) keep their original single-press actions unaffected by the 5th item', async () => {
+      stubHealthyFetch()
+      const { fn: dayFn, calls: dayCalls } = fakeDayEvents({ kind: 'success', result: dayEventsResult({ events: [] }) })
+      const { fn: upcomingFn, calls: upcomingCalls } = fakeUpcomingEvents({ kind: 'success', result: upcomingEventsResult({ events: [] }) })
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, fetchDayEventsFn: dayFn, fetchUpcomingEventsFn: upcomingFn })
+      await app.start()
+
+      bridge.emit(press()) // index0: 予定を登録
+      await flushMicrotasks()
+      expect(app.getScreen()).toBe('recording')
+      bridge.emit(doublePress()) // cancel back home
+      await flushMicrotasks()
+
+      await selectHomeMenu(bridge, 1) // index1: 直近5件の予定
+      bridge.emit(press())
+      await flushMicrotasks()
+      expect(upcomingCalls).toHaveLength(1)
+      bridge.emit(doublePress())
+      await flushMicrotasks()
+
+      await selectHomeMenu(bridge, 2) // index2: 今日の予定
+      bridge.emit(press())
+      await flushMicrotasks()
+      expect(dayCalls).toHaveLength(1)
+      expect(dayCalls[0]?.day).toBe('today')
+      bridge.emit(doublePress())
+      await flushMicrotasks()
+
+      await selectHomeMenu(bridge, 3) // index3: 明日の予定
+      bridge.emit(press())
+      await flushMicrotasks()
+      expect(dayCalls).toHaveLength(2)
+      expect(dayCalls[1]?.day).toBe('tomorrow')
+    })
+
+    it('shows only a 3-item window at a time as selection moves, never all 5 at once, with a correct N/5 indicator', async () => {
       stubHealthyFetch()
       const bridge = new FakeEvenAppBridge()
       const app = createApp(bridge)
@@ -2859,26 +2900,53 @@ describe('createApp', () => {
 
       expect(bridge.createStartUpCalls[0]).toBeDefined()
       const initialText = (bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }).textObject[0]?.content ?? ''
-      expect(initialText).toContain('1/4')
+      expect(initialText).toContain('1/5')
       expect(initialText).not.toContain('明日の予定')
 
       await selectHomeMenu(bridge, 2) // -> 今日の予定 (window shifts to hide 予定を登録)
       let text = bridge.lastTextContent() ?? ''
-      expect(text).toContain('3/4')
+      expect(text).toContain('3/5')
       expect(text).not.toContain('予定を登録')
       expect(text).toContain('> 今日の予定')
 
       bridge.emit(swipeDown()) // -> 明日の予定
       await flushMicrotasks()
       text = bridge.lastTextContent() ?? ''
-      expect(text).toContain('4/4')
+      expect(text).toContain('4/5')
       expect(text).toContain('> 明日の予定')
       expect(app.getHomeMenuIndex()).toBe(3)
+
+      bridge.emit(swipeDown()) // -> Googleカレンダーを再接続
+      await flushMicrotasks()
+      text = bridge.lastTextContent() ?? ''
+      expect(text).toContain('5/5')
+      expect(text).toContain('> Googleカレンダーを再接続')
+      expect(app.getHomeMenuIndex()).toBe(4)
 
       // 末尾でこれ以上進まない(クランプ)
       bridge.emit(swipeDown())
       await flushMicrotasks()
-      expect(app.getHomeMenuIndex()).toBe(3)
+      expect(app.getHomeMenuIndex()).toBe(4)
+    })
+
+    it('Phase 2K: swiping down through all 5 items then back up returns to the first item (full round trip)', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge)
+      await app.start()
+      expect(app.getHomeMenuIndex()).toBe(0)
+
+      for (let i = 1; i <= 4; i += 1) {
+        bridge.emit(swipeDown())
+        await flushMicrotasks()
+        expect(app.getHomeMenuIndex()).toBe(i)
+      }
+      // 先頭でこれ以上戻らない(クランプ)は既存の別テストで確認済み。ここでは末尾からの折り返しのみ確認する。
+      for (let i = 3; i >= 0; i -= 1) {
+        bridge.emit(swipeUp())
+        await flushMicrotasks()
+        expect(app.getHomeMenuIndex()).toBe(i)
+      }
     })
 
     it('does not call any backend API while moving the selection', async () => {
@@ -2997,8 +3065,10 @@ describe('createApp', () => {
         bridge.emit(press())
         await flushMicrotasks()
         expect(calls).toHaveLength(1)
+        // localeは今回追加された正規ロケール('ja'|'en')送出用のフィールド(i18n対応)であり、
+        // now/timeMaxのようなクライアント側時刻情報ではない。この検証の主旨(時刻情報を送らない)には影響しない。
         expect(Object.keys(calls[0] ?? {}).sort()).toEqual(
-          ['baseUrl', 'installId', 'limit', 'requestId', 'sessionToken', 'signal', 'timeoutMs'].sort(),
+          ['baseUrl', 'installId', 'limit', 'locale', 'requestId', 'sessionToken', 'signal', 'timeoutMs'].sort(),
         )
       })
 

@@ -7,6 +7,7 @@ import { hashValue, shortHashPrefix } from '../security/devSessionToken.js';
 import type { PluginSessionRepository } from '../firestore/pluginSessionRepository.js';
 import type { PluginEventCandidateRepository } from '../firestore/pluginEventCandidateRepository.js';
 import { registerCandidateEvent, type RegisterCandidateDeps } from '../services/pluginCalendarRegistrationService.js';
+import { localeFromBody } from '../i18n/locale.js';
 import { resolvePrincipal } from '../product/principal.js';
 import type { ProductInstallationRepository } from '../product/productInstallationRepository.js';
 
@@ -195,6 +196,10 @@ export function createPluginCalendarEventsRouter(deps: PluginCalendarEventsRoute
       return;
     }
 
+    // locale はisValidBodyShape/normalizeLegacyAllDayOmittedBodyの既知フィールド検証とは独立に
+    // req.bodyから直接取得する(isValidBodyShapeはlocaleを知らないが未知キーとして素通りする)。
+    const locale = localeFromBody(req.body);
+
     const body = normalizeLegacyAllDayOmittedBody(req.body as RegisterBody | undefined);
     if (!isValidBodyShape(body)) {
       errorJson(res, 400, 'Invalid request body');
@@ -247,6 +252,7 @@ export function createPluginCalendarEventsRouter(deps: PluginCalendarEventsRoute
       { clock: deps.clock, candidateRepo: deps.candidateRepo, resolveCalendarService: deps.resolveCalendarService },
       body.candidateId,
       auth.principal.userId,
+      locale,
     );
 
     logSafeEvent({
