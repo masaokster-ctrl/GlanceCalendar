@@ -51,10 +51,10 @@ describe('vite product mode config', () => {
   })
 })
 
-describe('app.json manifest (Phase 2K: version 0.3.1)', () => {
-  it('bumps the version to 0.3.1 while keeping package_id/edition/SDK version unchanged', () => {
+describe('app.json manifest (Phase 2K: version 0.3.2)', () => {
+  it('bumps the version to 0.3.2 while keeping package_id/edition/SDK version unchanged', () => {
     const manifest = loadAppJson()
-    expect(manifest.version).toBe('0.3.1')
+    expect(manifest.version).toBe('0.3.2')
     expect(manifest.package_id).toBe('com.masaokster.calendarwithgemini')
     expect(manifest.edition).toBe('202601')
     expect(manifest.min_sdk_version).toBe('0.0.12')
