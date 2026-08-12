@@ -13,7 +13,7 @@ import { PcmBuffer, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS } from './recor
 import { encodeWav } from './wav'
 import * as screens from './screens'
 import { checkBackendHealth } from './backendHealth'
-import { saveBackendAvailable, loadLocale } from './storage'
+import { saveBackendAvailable, saveLocale, loadLocale } from './storage'
 import { detectLocale, setActiveLocale, getActiveLocale, type Locale } from './i18n/locale'
 import { logSafe } from './safeLog'
 import { errorMessage, type ErrorCode } from './errors'
@@ -2774,15 +2774,46 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
 
   async function start(): Promise<void> {
     // ロケール解決(サーバへ送出するlocale query/bodyの値を決める)。Even Hub SDKにはlocale APIが
-    // 無いため、保存済み値(bridge)> navigator.languages > 'ja' の優先順で決定する。
+    // 無いため、navigator.languages(複数形) > navigator.language(単数形) > 保存済み値(bridge、
+    // navigatorが一切使えない場合のみのフォールバック) > 'ja' の優先順で決定する。
+    // 明示的な言語選択UIが存在しない現状、保存済み値は「前回起動時にnavigatorから実際に検出できた
+    // 値のキャッシュ」に過ぎないため、常にライブのnavigator検出結果を優先する(古い保存値が
+    // 永久に上書きし続ける状態を避ける)。
+    // navigator.languages/navigator.languageがEven Realitiesアプリの表示言語設定と実際に連動しているかは
+    // 未確認(SDK/ドキュメントに記載なし)。唯一利用可能な自動検出手段のため使うが、確定仕様ではない。
     // deps.locale指定時はテスト用の決定的注入として検出をスキップする。既存動作(locale未検出時の
     // 挙動)には一切影響しない(各クライアントはlocale未指定時と完全同一のURL/bodyになる設計のため)。
+    const navigatorLanguagesRaw = globalThis.navigator?.languages ?? null
+    const navigatorLanguageRaw = globalThis.navigator?.language ?? null
+    let storedLocaleRaw: Locale | null = null
+    let resolvedLocale: Locale
     if (configuredLocale) {
-      setActiveLocale(configuredLocale)
+      resolvedLocale = configuredLocale
     } else {
-      const stored = await loadLocale(bridge).catch(() => null)
-      setActiveLocale(detectLocale({ stored, navigatorLanguages: globalThis.navigator?.languages }))
+      storedLocaleRaw = await loadLocale(bridge).catch(() => null)
+      resolvedLocale = detectLocale({
+        stored: storedLocaleRaw,
+        navigatorLanguages: navigatorLanguagesRaw,
+        navigatorLanguage: navigatorLanguageRaw,
+      })
     }
+    setActiveLocale(resolvedLocale)
+
+    // 診断目的の一時ログ(恒久仕様ではない)。次回実機テストで「Even RealitiesをEnglishにした状態で
+    // 実際にnavigator.languages/navigator.languageが何を返しているか」を安全ログから確認するためのもの。
+    logSafe({
+      event: 'locale_resolved',
+      resolvedLocale,
+      navigatorLanguagesRaw,
+      navigatorLanguageRaw,
+      storedLocaleRaw,
+    })
+
+    // 解決結果を毎回永続化する。stored値は「ユーザーの意図的な選択」ではなく「前回起動時に実際に
+    // 検出できた値のキャッシュ」であるべきため、毎回上書きして古い値を残さない。失敗してもloadLocale
+    // /saveBackendAvailable同様catchして無視する(ロケール解決自体は既にactiveLocaleへ反映済みのため、
+    // 保存の成否はstart()自体の成功を左右しない)。
+    await saveLocale(bridge, resolvedLocale).catch(() => {})
 
     // devセッションが有効な間はdevモード(既存動作を変えない)。製品モードでは、有効な
     // device credential(refresh tokenが未失効)を既に保持していればホームへ、なければ

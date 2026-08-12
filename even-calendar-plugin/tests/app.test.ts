@@ -729,7 +729,7 @@ describe('createApp', () => {
     expect(app.getRecordingContext().state).toBe('idle')
   })
 
-  it('never stores anything except the backendAvailable flag in local storage (no PCM)', async () => {
+  it('never stores anything except the backendAvailable flag and locale in local storage (no PCM)', async () => {
     stubHealthyFetch()
     const bridge = new FakeEvenAppBridge()
     const app = createApp(bridge)
@@ -744,8 +744,9 @@ describe('createApp', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
-    expect(Array.from(bridge.storage.values())).toEqual(['1'])
+    expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+    expect(bridge.storage.get('even-calendar.backendAvailable')).toBe('1')
+    expect(['ja', 'en']).toContain(bridge.storage.get('even-calendar.locale'))
   })
 
   it('reports backendAvailable=true when the health check succeeds', async () => {
@@ -763,6 +764,51 @@ describe('createApp', () => {
     await app.start()
     expect(bridge.storage.get('even-calendar.backendAvailable')).toBe('0')
     expect(app.getScreen()).toBe('home')
+  })
+
+  it('persists the resolved locale via saveLocale on every start() (deps.locale-injected case)', async () => {
+    stubHealthyFetch()
+    const bridge = new FakeEvenAppBridge()
+    // 過去に保存された値が残っていても、resolvedLocale(ここではdeps.locale='en'で決定的に注入)で
+    // 常に上書きされることを確認する(古い保存値が永久に残らないことの直接検証)。
+    bridge.storage.set('even-calendar.locale', 'ja')
+    const app = createApp(bridge, { locale: 'en' })
+    await app.start()
+    expect(bridge.storage.get('even-calendar.locale')).toBe('en')
+  })
+
+  it('persists a supported locale value via saveLocale even without deps.locale (auto-detected case)', async () => {
+    stubHealthyFetch()
+    const bridge = new FakeEvenAppBridge()
+    const app = createApp(bridge)
+    await app.start()
+    expect(['ja', 'en']).toContain(bridge.storage.get('even-calendar.locale'))
+  })
+
+  it('logs a locale_resolved diagnostic event containing only safe fields (no token/installId/etc.)', async () => {
+    stubHealthyFetch()
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const bridge = new FakeEvenAppBridge()
+    const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'en' })
+    await app.start()
+
+    const localeLogCall = logSpy.mock.calls.find((call) => {
+      try {
+        return JSON.parse(String(call[0])).event === 'locale_resolved'
+      } catch {
+        return false
+      }
+    })
+    expect(localeLogCall).toBeDefined()
+    const parsed = JSON.parse(String(localeLogCall?.[0])) as Record<string, unknown>
+    expect(parsed.resolvedLocale).toBe('en')
+    expect(Object.keys(parsed).sort()).toEqual(
+      ['event', 'navigatorLanguageRaw', 'navigatorLanguagesRaw', 'resolvedLocale', 'storedLocaleRaw'].sort(),
+    )
+    expect(String(localeLogCall?.[0])).not.toContain('test-session-token')
+    expect(String(localeLogCall?.[0])).not.toContain(TEST_DEPS_BASE.installId)
+
+    logSpy.mockRestore()
   })
 
   it('never logs PCM/base64 content or conversation-shaped text', async () => {
@@ -1550,7 +1596,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
 
-      expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
     })
   })
 
@@ -1830,7 +1876,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
 
-      expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
     })
 
     it('discards the candidate from memory on cancel, success, and failure alike', async () => {
@@ -2289,7 +2335,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
       expect(app.getScreen()).toBe('candidate')
-      expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
     })
 
     it('foreground re-entry does not auto-continue the conversation: it resets to home', async () => {
@@ -2750,7 +2796,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
 
-      expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
     })
 
     it('discards the events array from memory on return to home (RESET)', async () => {
@@ -3344,7 +3390,7 @@ describe('createApp', () => {
         await selectHomeMenu(bridge, 1)
         bridge.emit(press())
         await flushMicrotasks()
-        expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
+        expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
       })
 
       it('never logs event titles or ISO date/time content, nor the session token/install id', async () => {
@@ -3503,7 +3549,7 @@ describe('createApp', () => {
     it('never persists eventId or event content to localStorage', async () => {
       const bridge = new FakeEvenAppBridge()
       await reachEventDetailFromDayList(bridge, { detail: { title: 'UNIQUE_TITLE_SENTINEL' } })
-      expect(Array.from(bridge.storage.keys())).toEqual(['even-calendar.backendAvailable'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
     })
 
     it('double press from the detail screen restores the originating list at the same selected position (no refetch)', async () => {

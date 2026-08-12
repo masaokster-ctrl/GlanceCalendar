@@ -27,21 +27,43 @@ function primarySubtagLocale(tag: string): Locale | null {
 }
 
 export interface DetectLocaleParams {
-  /** 永続化済みの値があれば('ja'|'en'のみ)最優先。それ以外の値(未対応言語・不正値)は無視する。 */
+  /**
+   * 永続化済みの値。この関数内では「navigatorが一切使えない場合のみのフォールバック」としてのみ使う
+   * (最優先ではない)。アプリ独自の言語選択UIが存在しない現状、永続値は「前回起動時にnavigatorから
+   * 実際に検出できた値のキャッシュ」に過ぎず、ユーザーの意図的な選択ではない。過去に書き込まれた値が
+   * 現在のnavigator検出結果を永久に上書きする状態を避けるため、常にnavigatorを優先する。
+   */
   stored: string | null | undefined
   /** 通常はglobalThis.navigator?.languagesをそのまま渡す。先頭要素のprimary subtagのみを見る。 */
   navigatorLanguages: readonly string[] | null | undefined
+  /**
+   * 通常はglobalThis.navigator?.language(単数形)をそのまま渡す。navigatorLanguages(複数形の配列)が
+   * 未実装/空配列を返す実行環境向けの追加フォールバック信号。
+   */
+  navigatorLanguage?: string | null | undefined
 }
 
-/** 優先順位: stored('ja'|'en'のみ受理) > navigatorLanguagesの先頭要素のprimary subtag > 'ja'。 */
+/**
+ * 優先順位: navigatorLanguagesの先頭要素のprimary subtag > navigatorLanguage(単数形)のprimary subtag >
+ * stored('ja'|'en'のみ受理、navigatorが一切使えない場合のみのフォールバック) > 'ja'。
+ *
+ * 注意: navigator.languages/navigator.languageがEven Realitiesアプリ自体の「表示言語」設定と
+ * 実際に連動しているかどうかは未確認(SDK/ドキュメントに記載なし、plugin実行環境はFlutter WebView)。
+ * これは唯一利用可能な自動検出手段であるため使用するが、確定した仕様として書いているわけではない。
+ */
 export function detectLocale(params: DetectLocaleParams): Locale {
-  if (isSupportedLocale(params.stored)) return params.stored
-
   const primaryTag = params.navigatorLanguages?.[0]
   if (typeof primaryTag === 'string') {
     const locale = primarySubtagLocale(primaryTag)
     if (locale) return locale
   }
+
+  if (typeof params.navigatorLanguage === 'string') {
+    const locale = primarySubtagLocale(params.navigatorLanguage)
+    if (locale) return locale
+  }
+
+  if (isSupportedLocale(params.stored)) return params.stored
 
   return 'ja'
 }
