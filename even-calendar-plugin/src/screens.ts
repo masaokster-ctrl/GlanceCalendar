@@ -6,13 +6,17 @@ import { getActiveLocale, type Locale } from './i18n/locale'
 // (app.ts側の98箇所の呼び出しを書き換えないため)。現在ロケールはi18n/locale.tsのモジュールスコープ値。
 // 既定は'ja'のため、setActiveLocaleを呼ばない限り従来と完全に同一の文字列を返す。
 
-/** Phase 2K: ホームメニューは「要素数5・順序不変・index4が再接続」が不変条件。両ロケールで型として固定する。 */
-type HomeMenuTuple = readonly [string, string, string, string, string]
+/**
+ * ホームメニューは「要素数6・順序不変・index4が再接続・index5が言語選択」が不変条件。
+ * 両ロケールで型として固定する(Phase 2K: 5要素だったものに、末尾へLanguage項目を追加)。
+ */
+type HomeMenuTuple = readonly [string, string, string, string, string, string]
 
 export const HOME_MENU_ITEMS_BY_LOCALE: Record<Locale, HomeMenuTuple> = {
-  // Phase 2K: 5番目の項目はGoogle OAuth再連携専用。既存4項目の順番・動作は変更しない(末尾に追加のみ)。
-  ja: ['予定を登録', '直近5件の予定', '今日の予定', '明日の予定', 'Googleカレンダーを再接続'],
-  en: ['New event', 'Next 5 events', "Today's events", "Tomorrow's events", 'Reconnect Google Calendar'],
+  // Phase 2K: 5番目の項目はGoogle OAuth再連携専用。6番目は言語選択画面(Language)専用。
+  // 既存5項目の順番・動作は変更しない(末尾に追加のみ)。
+  ja: ['予定を登録', '直近5件の予定', '今日の予定', '明日の予定', 'Googleカレンダーを再接続', '言語'],
+  en: ['New event', 'Next 5 events', "Today's events", "Tomorrow's events", 'Reconnect Google Calendar', 'Language'],
 }
 
 /** 後方互換のため日本語の配列をそのまま公開し続ける(既存テスト・既存importが参照している)。 */
@@ -116,6 +120,19 @@ interface ScreenStrings {
   hintPressToMenu: string
   pairingError: Record<PairingErrorKind, string>
   hintPressOrDoubleReconnect: string
+
+  languageTitle: string
+  hintDoubleDiagnostics: string
+  hintPressOrDoubleBack: string
+  diagnosticsTitle: string
+  diagLabelNavLanguages: string
+  diagLabelNavLanguage: string
+  diagLabelDocLang: string
+  diagLabelIntlLocale: string
+  diagLabelStored: string
+  diagLabelActive: string
+  diagLabelDeviceInfo: string
+  diagLabelGlassesInfo: string
 }
 
 const JA: ScreenStrings = {
@@ -210,6 +227,19 @@ const JA: ScreenStrings = {
     auth_failure: '認証に失敗しました',
   },
   hintPressOrDoubleReconnect: '押す/二度押し: 再接続',
+
+  languageTitle: '言語',
+  hintDoubleDiagnostics: '二度押し: 診断情報',
+  hintPressOrDoubleBack: '押す/二度押し: 戻る',
+  diagnosticsTitle: '診断情報',
+  diagLabelNavLanguages: 'nav.languages',
+  diagLabelNavLanguage: 'nav.language',
+  diagLabelDocLang: 'doc.lang',
+  diagLabelIntlLocale: 'Intl',
+  diagLabelStored: '保存値',
+  diagLabelActive: '現在',
+  diagLabelDeviceInfo: 'devInfo',
+  diagLabelGlassesInfo: 'glassesInfo',
 }
 
 // 英語版。G2は576x288の1コンテナ表示のため、行数と1行の短さを日本語版と揃える。
@@ -306,6 +336,19 @@ const EN: ScreenStrings = {
     auth_failure: 'Authentication failed',
   },
   hintPressOrDoubleReconnect: 'Press/double press: reconnect',
+
+  languageTitle: 'Language',
+  hintDoubleDiagnostics: 'Double press: diagnostics',
+  hintPressOrDoubleBack: 'Press/double press: back',
+  diagnosticsTitle: 'Diagnostics',
+  diagLabelNavLanguages: 'nav.languages',
+  diagLabelNavLanguage: 'nav.language',
+  diagLabelDocLang: 'doc.lang',
+  diagLabelIntlLocale: 'Intl',
+  diagLabelStored: 'stored',
+  diagLabelActive: 'active',
+  diagLabelDeviceInfo: 'devInfo',
+  diagLabelGlassesInfo: 'glassesInfo',
 }
 
 const STRINGS: Record<Locale, ScreenStrings> = { ja: JA, en: EN }
@@ -577,4 +620,55 @@ export function pairingSuccessScreenText(): string {
 
 export function pairingErrorScreenText(kind: PairingErrorKind): string {
   return [s().pairingError[kind], '', s().hintPressOrDoubleReconnect].join('\n')
+}
+
+// --- 言語選択/診断画面 ---
+
+/**
+ * 選択肢の表記は常に固定(activeLocaleに関わらず"English"/"日本語"のまま)。どちらのロケールで
+ * 見ていても両方の言語名がその言語自身の表記で見える必要があるため、STRINGS(ロケール別テーブル)
+ * を経由せずここで直接定義する。
+ */
+export const LANGUAGE_OPTIONS: readonly [{ locale: Locale; label: string }, { locale: Locale; label: string }] = [
+  { locale: 'en', label: 'English' },
+  { locale: 'ja', label: '日本語' },
+]
+
+/** 呼び出し側(app.ts)がselectedIndexを現在のactiveLocaleに合わせて初期化することで、現在の選択言語を示す。 */
+export function languageScreenText(selectedIndex: number): string {
+  const lines = LANGUAGE_OPTIONS.map((option, i) => (i === selectedIndex ? `> ${option.label}` : `  ${option.label}`))
+  return [s().languageTitle, '', ...lines, '', s().hintSwipeSelect, s().hintPressRun, s().hintDoubleDiagnostics].join('\n')
+}
+
+/**
+ * navigator/document/Intl/bridgeの生値取得はapp.ts側の責務(このモジュールはvitest environment:'node'
+ * で動くため直接参照しない)。deviceInfoStatus/glassesInfoStatusは"ok locale=..."/"fail"のような
+ * 既に整形済みの短い文字列であること前提(値そのものではなくapp.ts側で安全に組み立て済み)。
+ */
+export interface LanguageDiagnosticsValues {
+  navigatorLanguages: string
+  navigatorLanguage: string
+  documentLang: string
+  intlLocale: string
+  stored: string
+  active: string
+  deviceInfoStatus: string
+  glassesInfoStatus: string
+}
+
+/** 実機診断専用の画面。secret/token/installId/sn等は一切含まない(渡されるのは言語タグ相当の文字列のみ)。 */
+export function languageDiagnosticsScreenText(values: LanguageDiagnosticsValues): string {
+  return [
+    s().diagnosticsTitle,
+    `${s().diagLabelNavLanguages}: ${truncateForDisplay(values.navigatorLanguages, 40)}`,
+    `${s().diagLabelNavLanguage}: ${truncateForDisplay(values.navigatorLanguage, 40)}`,
+    `${s().diagLabelDocLang}: ${truncateForDisplay(values.documentLang, 40)}`,
+    `${s().diagLabelIntlLocale}: ${truncateForDisplay(values.intlLocale, 40)}`,
+    `${s().diagLabelStored}: ${values.stored}`,
+    `${s().diagLabelActive}: ${values.active}`,
+    `${s().diagLabelDeviceInfo}: ${truncateForDisplay(values.deviceInfoStatus, 45)}`,
+    `${s().diagLabelGlassesInfo}: ${truncateForDisplay(values.glassesInfoStatus, 45)}`,
+    '',
+    s().hintPressOrDoubleBack,
+  ].join('\n')
 }

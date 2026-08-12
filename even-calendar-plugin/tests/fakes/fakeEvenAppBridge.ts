@@ -1,5 +1,5 @@
 import type { EvenHubEvent } from '@evenrealities/even_hub_sdk'
-import type { BridgeLike } from '../../src/app'
+import type { BridgeLike, DeviceInfoLike } from '../../src/app'
 
 export interface TextUpgradeCall {
   containerID?: number
@@ -34,6 +34,14 @@ export class FakeEvenAppBridge implements BridgeLike {
 
   // 停止後の画面更新(bridge呼び出し自体)の失敗を再現するためのフラグ。
   public textUpgradeThrows = false
+
+  // getDeviceInfo()/callEvenApp('getGlassesInfo')のテスト用フック。既定値は実SDK同様
+  // localeフィールドを持たない({model,sn,status}のみ)ため、既存テストの挙動には一切影響しない。
+  public deviceInfo: DeviceInfoLike | null = { model: 'g2', sn: 'test-sn', status: 'connected' }
+  public getDeviceInfoThrows = false
+  public glassesInfoRaw: unknown = { model: 'g2', sn: 'test-sn', status: 'connected' }
+  public callEvenAppThrows = false
+  public callEvenAppCalls: Array<{ method: string; params?: unknown }> = []
 
   private listeners: Array<(event: EvenHubEvent) => void> = []
 
@@ -80,6 +88,24 @@ export class FakeEvenAppBridge implements BridgeLike {
 
   async getLocalStorage(key: string): Promise<string> {
     return this.storage.get(key) ?? ''
+  }
+
+  async getDeviceInfo(): Promise<DeviceInfoLike | null> {
+    if (this.getDeviceInfoThrows) {
+      throw new Error('getDeviceInfo failed')
+    }
+    return this.deviceInfo
+  }
+
+  async callEvenApp(method: string, params?: unknown): Promise<unknown> {
+    this.callEvenAppCalls.push({ method, params })
+    if (this.callEvenAppThrows) {
+      throw new Error('callEvenApp failed')
+    }
+    if (method === 'getGlassesInfo') {
+      return this.glassesInfoRaw
+    }
+    return null
   }
 
   get listenerCount(): number {

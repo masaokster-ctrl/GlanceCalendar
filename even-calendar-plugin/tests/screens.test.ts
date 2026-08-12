@@ -33,29 +33,48 @@ const ALL_SCREEN_TEXTS = [
   screens.pairingErrorScreenText('communication_failure'),
   screens.pairingErrorScreenText('cancelled'),
   screens.pairingErrorScreenText('auth_failure'),
+  screens.languageScreenText(0),
+  screens.languageScreenText(1),
+  screens.languageDiagnosticsScreenText({
+    navigatorLanguages: 'en-US,fr',
+    navigatorLanguage: 'en-US',
+    documentLang: 'en',
+    intlLocale: 'en-US',
+    stored: '(empty)',
+    active: 'ja',
+    deviceInfoStatus: 'ok locale=(empty)',
+    glassesInfoStatus: 'ok keys=model,sn,status locale=(empty)',
+  }),
 ]
 
 describe('screen text builders', () => {
-  it('home menu holds 5 items internally: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定, Googleカレンダーを再接続 (昨日の予定 removed)', () => {
-    expect(screens.HOME_MENU_ITEM_COUNT).toBe(5)
+  it('home menu holds 6 items internally: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定, Googleカレンダーを再接続, 言語 (昨日の予定 removed)', () => {
+    expect(screens.HOME_MENU_ITEM_COUNT).toBe(6)
     expect(screens.HOME_MENU_ITEMS).toEqual([
       '予定を登録',
       '直近5件の予定',
       '今日の予定',
       '明日の予定',
       'Googleカレンダーを再接続',
+      '言語',
     ])
     expect(screens.HOME_MENU_ITEMS as readonly string[]).not.toContain('昨日の予定')
   })
 
-  it('Phase 2K: existing first 4 items keep their original order (only the 5th item was appended)', () => {
-    expect(screens.HOME_MENU_ITEMS.slice(0, 4)).toEqual(['予定を登録', '直近5件の予定', '今日の予定', '明日の予定'])
-    expect(screens.HOME_MENU_ITEMS[4]).toBe('Googleカレンダーを再接続')
+  it('Phase 2K: existing first 5 items keep their original order (only the 6th item was appended)', () => {
+    expect(screens.HOME_MENU_ITEMS.slice(0, 5)).toEqual([
+      '予定を登録',
+      '直近5件の予定',
+      '今日の予定',
+      '明日の予定',
+      'Googleカレンダーを再接続',
+    ])
+    expect(screens.HOME_MENU_ITEMS[5]).toBe('言語')
   })
 
-  it('home menu shows the app name, a N/5 position indicator, and only 3 visible items at once', () => {
+  it('home menu shows the app name, a N/6 position indicator, and only 3 visible items at once', () => {
     const text = screens.homeScreenText(0)
-    expect(text).toContain('Calendar with Gemini 1/5')
+    expect(text).toContain('Calendar with Gemini 1/6')
     expect(text).toContain('> 予定を登録')
     expect(text).toContain('  直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -65,7 +84,7 @@ describe('screen text builders', () => {
 
   it('selection 0 shows items [予定を登録, 直近5件の予定, 今日の予定] with the cursor on 予定を登録', () => {
     const text = screens.homeScreenText(0)
-    expect(text).toContain('Calendar with Gemini 1/5')
+    expect(text).toContain('Calendar with Gemini 1/6')
     expect(text).toContain('> 予定を登録')
     expect(text).toContain('  直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -74,7 +93,7 @@ describe('screen text builders', () => {
 
   it('selection 1 shows the same window [予定を登録, 直近5件の予定, 今日の予定] with the cursor on 直近5件の予定', () => {
     const text = screens.homeScreenText(1)
-    expect(text).toContain('Calendar with Gemini 2/5')
+    expect(text).toContain('Calendar with Gemini 2/6')
     expect(text).toContain('  予定を登録')
     expect(text).toContain('> 直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -83,7 +102,7 @@ describe('screen text builders', () => {
 
   it('selection 2 shifts the window to [直近5件の予定, 今日の予定, 明日の予定] with the cursor on 今日の予定', () => {
     const text = screens.homeScreenText(2)
-    expect(text).toContain('Calendar with Gemini 3/5')
+    expect(text).toContain('Calendar with Gemini 3/6')
     expect(text).not.toContain('予定を登録')
     expect(text).toContain('  直近5件の予定')
     expect(text).toContain('> 今日の予定')
@@ -92,7 +111,7 @@ describe('screen text builders', () => {
 
   it('selection 3 shifts the window to [今日の予定, 明日の予定, Googleカレンダーを再接続] with the cursor on 明日の予定', () => {
     const text = screens.homeScreenText(3)
-    expect(text).toContain('Calendar with Gemini 4/5')
+    expect(text).toContain('Calendar with Gemini 4/6')
     expect(text).not.toContain('予定を登録')
     expect(text).not.toContain('直近5件の予定')
     expect(text).toContain('  今日の予定')
@@ -100,14 +119,26 @@ describe('screen text builders', () => {
     expect(text).toContain('  Googleカレンダーを再接続')
   })
 
-  it('selection 4 shows the same window [今日の予定, 明日の予定, Googleカレンダーを再接続] with the cursor on Googleカレンダーを再接続', () => {
+  it('selection 4 shifts the window to [明日の予定, Googleカレンダーを再接続, 言語] with the cursor on Googleカレンダーを再接続', () => {
     const text = screens.homeScreenText(4)
-    expect(text).toContain('Calendar with Gemini 5/5')
+    expect(text).toContain('Calendar with Gemini 5/6')
     expect(text).not.toContain('予定を登録')
     expect(text).not.toContain('直近5件の予定')
-    expect(text).toContain('  今日の予定')
+    expect(text).not.toContain('今日の予定')
     expect(text).toContain('  明日の予定')
     expect(text).toContain('> Googleカレンダーを再接続')
+    expect(text).toContain('  言語')
+  })
+
+  it('selection 5 shows the same window [明日の予定, Googleカレンダーを再接続, 言語] with the cursor on 言語', () => {
+    const text = screens.homeScreenText(5)
+    expect(text).toContain('Calendar with Gemini 6/6')
+    expect(text).not.toContain('予定を登録')
+    expect(text).not.toContain('直近5件の予定')
+    expect(text).not.toContain('今日の予定')
+    expect(text).toContain('  明日の予定')
+    expect(text).toContain('  Googleカレンダーを再接続')
+    expect(text).toContain('> 言語')
   })
 
   it('always shows exactly 3 menu item lines regardless of selection (no native scroll needed)', () => {
@@ -348,5 +379,64 @@ describe('Phase 2H product pairing screens', () => {
     for (const text of texts) {
       expect(text).not.toContain('@')
     }
+  })
+})
+
+describe('Language selection/diagnostics screens', () => {
+  it('LANGUAGE_OPTIONS always shows English/Japanese in their own script regardless of the current locale', () => {
+    expect(screens.LANGUAGE_OPTIONS).toEqual([
+      { locale: 'en', label: 'English' },
+      { locale: 'ja', label: '日本語' },
+    ])
+  })
+
+  it('language screen shows both options with the cursor on the selected index', () => {
+    const text = screens.languageScreenText(0)
+    expect(text).toContain('> English')
+    expect(text).toContain('  日本語')
+    expect(text).toContain('言語')
+    expect(text).toContain('二度押し: 診断情報')
+  })
+
+  it('language screen moves the cursor to the second option when selectedIndex=1', () => {
+    const text = screens.languageScreenText(1)
+    expect(text).toContain('  English')
+    expect(text).toContain('> 日本語')
+  })
+
+  it('diagnostics screen shows all the raw signal labels and "(empty)" for missing values', () => {
+    const text = screens.languageDiagnosticsScreenText({
+      navigatorLanguages: '(empty)',
+      navigatorLanguage: '(empty)',
+      documentLang: '(empty)',
+      intlLocale: 'en-US',
+      stored: '(empty)',
+      active: 'ja',
+      deviceInfoStatus: 'fail',
+      glassesInfoStatus: 'fail',
+    })
+    expect(text).toContain('nav.languages: (empty)')
+    expect(text).toContain('nav.language: (empty)')
+    expect(text).toContain('doc.lang: (empty)')
+    expect(text).toContain('Intl: en-US')
+    expect(text).toContain('保存値: (empty)')
+    expect(text).toContain('現在: ja')
+    expect(text).toContain('devInfo: fail')
+    expect(text).toContain('glassesInfo: fail')
+    expect(text).toContain('押す/二度押し: 戻る')
+  })
+
+  it('diagnostics screen never contains a "@" (defensive against accidentally leaking an email/account value)', () => {
+    const text = screens.languageDiagnosticsScreenText({
+      navigatorLanguages: 'en-US',
+      navigatorLanguage: 'en-US',
+      documentLang: 'en',
+      intlLocale: 'en-US',
+      stored: 'en',
+      active: 'en',
+      deviceInfoStatus: 'ok locale=(empty)',
+      glassesInfoStatus: 'ok keys=model,sn,status locale=(empty)',
+    })
+    expect(text).not.toContain('@')
   })
 })

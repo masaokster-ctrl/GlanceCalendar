@@ -584,14 +584,19 @@ describe('createApp', () => {
     expect(app.getHomeMenuIndex()).toBe(4)
     expect(bridge.lastTextContent()).toContain('> Googleカレンダーを再接続')
 
+    bridge.emit(swipeDown())
+    await flushMicrotasks()
+    expect(app.getHomeMenuIndex()).toBe(5)
+    expect(bridge.lastTextContent()).toContain('> 言語')
+
     // 末尾でこれ以上下へは進まない(クランプ)
     bridge.emit(swipeDown())
     await flushMicrotasks()
-    expect(app.getHomeMenuIndex()).toBe(4)
+    expect(app.getHomeMenuIndex()).toBe(5)
 
     bridge.emit(swipeUp())
     await flushMicrotasks()
-    expect(app.getHomeMenuIndex()).toBe(3)
+    expect(app.getHomeMenuIndex()).toBe(4)
   })
 
   it('does not move the selection above the first item', async () => {
@@ -729,7 +734,7 @@ describe('createApp', () => {
     expect(app.getRecordingContext().state).toBe('idle')
   })
 
-  it('never stores anything except the backendAvailable flag and locale in local storage (no PCM)', async () => {
+  it('never stores anything except the backendAvailable flag in local storage (no PCM, no auto-saved locale)', async () => {
     stubHealthyFetch()
     const bridge = new FakeEvenAppBridge()
     const app = createApp(bridge)
@@ -744,9 +749,8 @@ describe('createApp', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+    expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
     expect(bridge.storage.get('even-calendar.backendAvailable')).toBe('1')
-    expect(['ja', 'en']).toContain(bridge.storage.get('even-calendar.locale'))
   })
 
   it('reports backendAvailable=true when the health check succeeds', async () => {
@@ -766,23 +770,24 @@ describe('createApp', () => {
     expect(app.getScreen()).toBe('home')
   })
 
-  it('persists the resolved locale via saveLocale on every start() (deps.locale-injected case)', async () => {
+  it('does not auto-save the resolved locale on start() when deps.locale is injected (0.3.3 auto-save behavior removed)', async () => {
     stubHealthyFetch()
     const bridge = new FakeEvenAppBridge()
-    // 過去に保存された値が残っていても、resolvedLocale(ここではdeps.locale='en'で決定的に注入)で
-    // 常に上書きされることを確認する(古い保存値が永久に残らないことの直接検証)。
+    // 過去に保存された値が残っていても、start()自身はもはやそれを読み書きしない
+    // (自動検出結果の書き戻しは廃止。書き込みはLanguage画面での明示選択時のみ)。
     bridge.storage.set('even-calendar.locale', 'ja')
     const app = createApp(bridge, { locale: 'en' })
     await app.start()
-    expect(bridge.storage.get('even-calendar.locale')).toBe('en')
+    expect(bridge.storage.get('even-calendar.locale')).toBe('ja')
+    expect(bridge.storage.has('even-calendar.locale')).toBe(true)
   })
 
-  it('persists a supported locale value via saveLocale even without deps.locale (auto-detected case)', async () => {
+  it('does not auto-save a locale value on start() without deps.locale either (auto-detected case, no explicit selection)', async () => {
     stubHealthyFetch()
     const bridge = new FakeEvenAppBridge()
     const app = createApp(bridge)
     await app.start()
-    expect(['ja', 'en']).toContain(bridge.storage.get('even-calendar.locale'))
+    expect(bridge.storage.has('even-calendar.locale')).toBe(false)
   })
 
   it('logs a locale_resolved diagnostic event containing only safe fields (no token/installId/etc.)', async () => {
@@ -1596,7 +1601,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
 
-      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
     })
   })
 
@@ -1876,7 +1881,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
 
-      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
     })
 
     it('discards the candidate from memory on cancel, success, and failure alike', async () => {
@@ -2335,7 +2340,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
       expect(app.getScreen()).toBe('candidate')
-      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
     })
 
     it('foreground re-entry does not auto-continue the conversation: it resets to home', async () => {
@@ -2796,7 +2801,7 @@ describe('createApp', () => {
       bridge.emit(press())
       await flushMicrotasks()
 
-      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
     })
 
     it('discards the events array from memory on return to home (RESET)', async () => {
@@ -2900,7 +2905,7 @@ describe('createApp', () => {
       }
     }
 
-    it('home menu holds exactly 5 items in order: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定, Googleカレンダーを再接続 (昨日の予定 removed)', async () => {
+    it('home menu holds exactly 6 items in order: 予定を登録, 直近5件の予定, 今日の予定, 明日の予定, Googleカレンダーを再接続, 言語 (昨日の予定 removed)', async () => {
       stubHealthyFetch()
       const bridge = new FakeEvenAppBridge()
       const app = createApp(bridge)
@@ -2908,7 +2913,7 @@ describe('createApp', () => {
       const payload = bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }
       const text = payload.textObject[0]?.content ?? ''
       expect(text).not.toContain('昨日の予定')
-      expect(text).toContain('Calendar with Gemini 1/5')
+      expect(text).toContain('Calendar with Gemini 1/6')
       const order = ['予定を登録', '直近5件の予定', '今日の予定']
       const indices = order.map((item) => text.indexOf(item))
       expect(indices.every((i) => i >= 0)).toBe(true)
@@ -2952,7 +2957,7 @@ describe('createApp', () => {
       expect(dayCalls[1]?.day).toBe('tomorrow')
     })
 
-    it('shows only a 3-item window at a time as selection moves, never all 5 at once, with a correct N/5 indicator', async () => {
+    it('shows only a 3-item window at a time as selection moves, never all 6 at once, with a correct N/6 indicator', async () => {
       stubHealthyFetch()
       const bridge = new FakeEvenAppBridge()
       const app = createApp(bridge)
@@ -2960,33 +2965,40 @@ describe('createApp', () => {
 
       expect(bridge.createStartUpCalls[0]).toBeDefined()
       const initialText = (bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }).textObject[0]?.content ?? ''
-      expect(initialText).toContain('1/5')
+      expect(initialText).toContain('1/6')
       expect(initialText).not.toContain('明日の予定')
 
       await selectHomeMenu(bridge, 2) // -> 今日の予定 (window shifts to hide 予定を登録)
       let text = bridge.lastTextContent() ?? ''
-      expect(text).toContain('3/5')
+      expect(text).toContain('3/6')
       expect(text).not.toContain('予定を登録')
       expect(text).toContain('> 今日の予定')
 
       bridge.emit(swipeDown()) // -> 明日の予定
       await flushMicrotasks()
       text = bridge.lastTextContent() ?? ''
-      expect(text).toContain('4/5')
+      expect(text).toContain('4/6')
       expect(text).toContain('> 明日の予定')
       expect(app.getHomeMenuIndex()).toBe(3)
 
       bridge.emit(swipeDown()) // -> Googleカレンダーを再接続
       await flushMicrotasks()
       text = bridge.lastTextContent() ?? ''
-      expect(text).toContain('5/5')
+      expect(text).toContain('5/6')
       expect(text).toContain('> Googleカレンダーを再接続')
       expect(app.getHomeMenuIndex()).toBe(4)
+
+      bridge.emit(swipeDown()) // -> 言語 (new last item)
+      await flushMicrotasks()
+      text = bridge.lastTextContent() ?? ''
+      expect(text).toContain('6/6')
+      expect(text).toContain('> 言語')
+      expect(app.getHomeMenuIndex()).toBe(5)
 
       // 末尾でこれ以上進まない(クランプ)
       bridge.emit(swipeDown())
       await flushMicrotasks()
-      expect(app.getHomeMenuIndex()).toBe(4)
+      expect(app.getHomeMenuIndex()).toBe(5)
     })
 
     it('Phase 2K: swiping down through all 5 items then back up returns to the first item (full round trip)', async () => {
@@ -3390,7 +3402,7 @@ describe('createApp', () => {
         await selectHomeMenu(bridge, 1)
         bridge.emit(press())
         await flushMicrotasks()
-        expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+        expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
       })
 
       it('never logs event titles or ISO date/time content, nor the session token/install id', async () => {
@@ -3434,6 +3446,177 @@ describe('createApp', () => {
       const bridge = new FakeEvenAppBridge()
       const app = await reachClarification(bridge)
       expect(app.getScreen()).toBe('clarification')
+    })
+  })
+
+  describe('Language selection (Home menu 6th item)', () => {
+    async function reachLanguageScreen(bridge: FakeEvenAppBridge, app: ReturnType<typeof createApp>): Promise<void> {
+      for (let i = 0; i < 5; i += 1) {
+        bridge.emit(swipeDown())
+        await flushMicrotasks()
+      }
+      expect(app.getHomeMenuIndex()).toBe(5)
+      bridge.emit(press())
+      await flushMicrotasks()
+    }
+
+    it('opens the language screen from Home showing English/日本語, cursor starting on the current active locale', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'ja' })
+      await app.start()
+
+      await reachLanguageScreen(bridge, app)
+
+      expect(app.getScreen()).toBe('language')
+      const text = bridge.lastTextContent() ?? ''
+      expect(text).toContain('English')
+      expect(text).toContain('日本語')
+      expect(text).toContain('> 日本語')
+    })
+
+    it('selecting English sets activeLocale to en, persists it via saveLocale, and returns to an English-rendered Home', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'ja' })
+      await app.start()
+      await reachLanguageScreen(bridge, app)
+
+      bridge.emit(swipeUp()) // cursor: 日本語(1) -> English(0)
+      await flushMicrotasks()
+      expect(bridge.lastTextContent() ?? '').toContain('> English')
+
+      bridge.emit(press()) // confirm English
+      await flushMicrotasks()
+
+      expect(app.getScreen()).toBe('home')
+      expect(bridge.storage.get('even-calendar.locale')).toBe('en')
+      const text = bridge.lastTextContent() ?? ''
+      expect(text).toContain('New event')
+      expect(text).not.toContain('予定を登録')
+    })
+
+    it('selecting 日本語 sets activeLocale to ja, persists it via saveLocale, and returns to a Japanese-rendered Home', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'en' })
+      await app.start()
+      await reachLanguageScreen(bridge, app)
+
+      expect(bridge.lastTextContent() ?? '').toContain('> English')
+      bridge.emit(swipeDown()) // cursor: English(0) -> 日本語(1)
+      await flushMicrotasks()
+      expect(bridge.lastTextContent() ?? '').toContain('> 日本語')
+
+      bridge.emit(press()) // confirm 日本語
+      await flushMicrotasks()
+
+      expect(app.getScreen()).toBe('home')
+      expect(bridge.storage.get('even-calendar.locale')).toBe('ja')
+      const text = bridge.lastTextContent() ?? ''
+      expect(text).toContain('予定を登録')
+      expect(text).not.toContain('New event')
+    })
+
+    it('double press on the language screen shows a diagnostics screen with safe values (no token/installId/serial number)', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      bridge.deviceInfo = { model: 'g2', sn: 'SECRET-SERIAL-VALUE', status: 'connected' }
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'ja' })
+      await app.start()
+      await reachLanguageScreen(bridge, app)
+
+      bridge.emit(doublePress())
+      await flushMicrotasks()
+
+      expect(app.getScreen()).toBe('languageDiagnostics')
+      const text = bridge.lastTextContent() ?? ''
+      expect(text).toContain('nav.languages')
+      expect(text).toContain('nav.language')
+      expect(text).toContain('doc.lang')
+      expect(text).toContain('Intl')
+      expect(text).toContain('devInfo')
+      expect(text).toContain('glassesInfo')
+      expect(text).not.toContain('SECRET-SERIAL-VALUE')
+      expect(text).not.toContain(TEST_DEPS_BASE.sessionToken)
+      expect(text).not.toContain(TEST_DEPS_BASE.installId)
+    })
+
+    it('press or double press on the diagnostics screen returns to the language screen', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'ja' })
+      await app.start()
+      await reachLanguageScreen(bridge, app)
+
+      bridge.emit(doublePress())
+      await flushMicrotasks()
+      expect(app.getScreen()).toBe('languageDiagnostics')
+
+      bridge.emit(press())
+      await flushMicrotasks()
+      expect(app.getScreen()).toBe('language')
+
+      bridge.emit(doublePress())
+      await flushMicrotasks()
+      expect(app.getScreen()).toBe('languageDiagnostics')
+
+      bridge.emit(doublePress())
+      await flushMicrotasks()
+      expect(app.getScreen()).toBe('language')
+    })
+  })
+
+  describe('Startup locale resolution order (locale must be resolved before the very first screen render)', () => {
+    it('renders the first Home screen already in English when deps.locale is en (no Japanese flash first)', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'en' })
+      await app.start()
+
+      expect(bridge.createStartUpCalls).toHaveLength(1)
+      const firstText = (bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }).textObject[0]?.content ?? ''
+      expect(firstText).toContain('New event')
+      expect(firstText).not.toContain('予定を登録')
+    })
+
+    it('renders the first Home screen already in Japanese when deps.locale is ja', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      const app = createApp(bridge, { ...TEST_DEPS_BASE, locale: 'ja' })
+      await app.start()
+
+      const firstText = (bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }).textObject[0]?.content ?? ''
+      expect(firstText).toContain('予定を登録')
+      expect(firstText).not.toContain('New event')
+    })
+  })
+
+  describe('Device locale integration (bridge.getDeviceInfo().locale end-to-end)', () => {
+    it('uses bridge.getDeviceInfo().locale over stored/navigator when it resolves to a supported locale', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      bridge.deviceInfo = { model: 'g2', sn: 'test-sn', status: 'connected', locale: 'en-US' }
+      bridge.storage.set('even-calendar.locale', 'ja')
+      const app = createApp(bridge, TEST_DEPS_BASE) // no deps.locale: exercises real detection
+      await app.start()
+
+      const firstText = (bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }).textObject[0]?.content ?? ''
+      expect(firstText).toContain('New event')
+    })
+
+    it('does not let callEvenApp("getGlassesInfo")\'s raw locale affect activeLocale (diagnostic-only, never used for detection)', async () => {
+      stubHealthyFetch()
+      const bridge = new FakeEvenAppBridge()
+      bridge.deviceInfo = { model: 'g2', sn: 'test-sn', status: 'connected' } // public API: no locale
+      bridge.glassesInfoRaw = { model: 'g2', sn: 'test-sn', status: 'connected', locale: 'en-US' } // raw only
+      bridge.storage.set('even-calendar.locale', 'ja') // explicit stored selection must still win
+      const app = createApp(bridge, TEST_DEPS_BASE)
+      await app.start()
+
+      const firstText = (bridge.createStartUpCalls[0] as { textObject: Array<{ content?: string }> }).textObject[0]?.content ?? ''
+      expect(firstText).toContain('予定を登録')
+      expect(firstText).not.toContain('New event')
     })
   })
 
@@ -3549,7 +3732,7 @@ describe('createApp', () => {
     it('never persists eventId or event content to localStorage', async () => {
       const bridge = new FakeEvenAppBridge()
       await reachEventDetailFromDayList(bridge, { detail: { title: 'UNIQUE_TITLE_SENTINEL' } })
-      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable', 'even-calendar.locale'])
+      expect(Array.from(bridge.storage.keys()).sort()).toEqual(['even-calendar.backendAvailable'])
     })
 
     it('double press from the detail screen restores the originating list at the same selected position (no refetch)', async () => {

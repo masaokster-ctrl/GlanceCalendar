@@ -14,15 +14,20 @@ afterEach(() => {
 })
 
 describe('HOME_MENU_ITEMS_BY_LOCALE (Phase 2K不変条件)', () => {
-  it('holds exactly 5 items in both locales', () => {
-    expect(screens.HOME_MENU_ITEMS_BY_LOCALE.ja).toHaveLength(5)
-    expect(screens.HOME_MENU_ITEMS_BY_LOCALE.en).toHaveLength(5)
-    expect(screens.HOME_MENU_ITEM_COUNT).toBe(5)
+  it('holds exactly 6 items in both locales', () => {
+    expect(screens.HOME_MENU_ITEMS_BY_LOCALE.ja).toHaveLength(6)
+    expect(screens.HOME_MENU_ITEMS_BY_LOCALE.en).toHaveLength(6)
+    expect(screens.HOME_MENU_ITEM_COUNT).toBe(6)
   })
 
   it('keeps index 4 as the Google Calendar reconnect entry in both locales', () => {
     expect(screens.HOME_MENU_ITEMS_BY_LOCALE.ja[4]).toBe('Googleカレンダーを再接続')
     expect(screens.HOME_MENU_ITEMS_BY_LOCALE.en[4]).toBe('Reconnect Google Calendar')
+  })
+
+  it('keeps index 5 as the Language selection entry in both locales', () => {
+    expect(screens.HOME_MENU_ITEMS_BY_LOCALE.ja[5]).toBe('言語')
+    expect(screens.HOME_MENU_ITEMS_BY_LOCALE.en[5]).toBe('Language')
   })
 
   it('keeps the first 4 actions in their original order in the English locale', () => {
@@ -47,17 +52,26 @@ describe('HOME_MENU_ITEMS_BY_LOCALE (Phase 2K不変条件)', () => {
 })
 
 describe('homeScreenText (en)', () => {
-  it('renders a 3-item window with an N/5 indicator and the English cursor line', () => {
+  it('renders a 3-item window with an N/6 indicator and the English cursor line', () => {
     const text = screens.homeScreenText(0)
-    expect(text).toContain('Calendar with Gemini 1/5')
+    expect(text).toContain('Calendar with Gemini 1/6')
     expect(text).toContain('> New event')
     expect(text).not.toContain('予定を登録')
   })
 
-  it('shifts the window to keep the last item visible and selected', () => {
+  it('shifts the window to keep Reconnect Google Calendar visible and selected at index 4', () => {
     const text = screens.homeScreenText(4)
-    expect(text).toContain('5/5')
+    expect(text).toContain('5/6')
     expect(text).toContain('> Reconnect Google Calendar')
+    expect(text).toContain('  Language')
+    expect(text).not.toContain('> New event')
+  })
+
+  it('shifts the window to keep the last item (Language) visible and selected', () => {
+    const text = screens.homeScreenText(5)
+    expect(text).toContain('6/6')
+    expect(text).toContain('> Language')
+    expect(text).toContain('  Reconnect Google Calendar')
     expect(text).not.toContain('> New event')
   })
 
@@ -103,6 +117,31 @@ describe('flow screens (en)', () => {
     expect(screens.pairingSuccessScreenText()).toContain('Connected')
     expect(screens.pairingErrorScreenText('expired')).toContain('The connection request expired')
     expect(screens.pairingErrorScreenText('auth_failure')).toContain('Authentication failed')
+  })
+
+  it('renders the language screen with English hints but option labels stay fixed (English/日本語)', () => {
+    const text = screens.languageScreenText(0)
+    expect(text).toContain('Language')
+    expect(text).toContain('> English')
+    expect(text).toContain('  日本語')
+    expect(text).toContain('Double press: diagnostics')
+  })
+
+  it('renders the diagnostics screen labels in English', () => {
+    const text = screens.languageDiagnosticsScreenText({
+      navigatorLanguages: '(empty)',
+      navigatorLanguage: '(empty)',
+      documentLang: '(empty)',
+      intlLocale: 'en-US',
+      stored: 'en',
+      active: 'en',
+      deviceInfoStatus: 'fail',
+      glassesInfoStatus: 'fail',
+    })
+    expect(text).toContain('Diagnostics')
+    expect(text).toContain('stored: en')
+    expect(text).toContain('active: en')
+    expect(text).toContain('Press/double press: back')
   })
 })
 

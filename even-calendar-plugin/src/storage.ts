@@ -23,7 +23,7 @@ export async function loadBackendAvailable(bridge: BridgeStorageLike): Promise<b
   return null
 }
 
-/** 現在ロケール選択UIはまだ存在しないため、この関数は将来のロケール切替UIに備えた保存経路(現状は呼び出し元が任意で使う)。 */
+/** Home menuの「Language」画面でユーザーが明示的に言語を選択した時にのみ呼ばれる(自動検出結果の書き戻しには使わない)。 */
 export async function saveLocale(bridge: BridgeStorageLike, value: Locale): Promise<void> {
   await bridge.setLocalStorage(KEY_LOCALE, value)
 }

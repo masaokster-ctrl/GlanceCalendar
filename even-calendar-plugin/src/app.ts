@@ -186,6 +186,20 @@ export type ScreenId =
   | 'pairing'
   | 'pairingSuccess'
   | 'pairingError'
+  | 'language'
+  | 'languageDiagnostics'
+
+/**
+ * SDKの公開DeviceInfo型にはlocaleフィールドは存在しないが、公式FAQがbridge.getDeviceInfo().localeの
+ * 参照を案内しているため、実機で実際に返ってきた場合だけ拾えるよう防御的にlocale?: unknownを許容する
+ * (plugin独自の型。SDKのDeviceInfoクラスとは別物)。sn等の値はログ/画面に一切出さないこと。
+ */
+export interface DeviceInfoLike {
+  model?: unknown
+  sn?: unknown
+  status?: unknown
+  locale?: unknown
+}
 
 /**
  * main.ts が実際に使うSDKブリッジのメソッドだけを要求する最小インターフェース。
@@ -199,6 +213,13 @@ export interface BridgeLike {
   onEvenHubEvent(cb: (event: EvenHubEvent) => void): () => void
   setLocalStorage(key: string, value: string): Promise<boolean>
   getLocalStorage(key: string): Promise<string>
+  getDeviceInfo(): Promise<DeviceInfoLike | null>
+  /**
+   * 低レベルの直接呼び出し。診断画面専用(実機でgetGlassesInfoの生レスポンスにlocale相当のキーが
+   * 含まれるかを確認するため)。未文書化の内部メソッド名のため、製品ロジック(detectLocaleの優先順位)
+   * には一切使わないこと。
+   */
+  callEvenApp(method: string, params?: unknown): Promise<unknown>
 }
 
 export interface App {
@@ -219,6 +240,7 @@ export interface App {
   getEditRecordingContext(): RecordingContext
   getEditAnalysisContext(): EditAnalysisContext
   getEditApplyContext(): EventMutationContext
+  getLanguageMenuIndex(): number
 }
 
 /**
@@ -266,6 +288,73 @@ export interface AppDeps {
   exchangePairingFn?: (params: ExchangePairingParams) => Promise<ExchangePairingOutcome>
   refreshSessionFn?: (params: RefreshSessionParams) => Promise<RefreshSessionOutcome>
   pairingPollMaxDurationMs?: number
+}
+
+/** start()で一度だけ収集する、locale解決とLanguage診断画面表示の両方に使う診断情報。 */
+interface DeviceLocaleDiagnostics {
+  deviceInfoResolved: boolean
+  /** bridge.getDeviceInfo().locale(公開API)。現行SDK実装ではほぼ確実にnull。 */
+  deviceInfoLocaleRaw: string | null
+  glassesInfoResolved: boolean
+  /** callEvenApp('getGlassesInfo')の生レスポンスのキー名一覧(値そのものは含まない。診断表示専用)。 */
+  glassesInfoKeys: string[]
+  /** 診断表示専用。detectLocaleの優先順位ロジックには一切使わない(未文書化APIのため)。 */
+  glassesInfoLocaleRaw: string | null
+}
+
+/**
+ * bridge.getDeviceInfo()(公開API)とcallEvenApp('getGlassesInfo')(未文書化・診断専用)を
+ * best-effortで両方試す。いずれも失敗してもstart()自体をブロックしない(常にcatchして無視)。
+ * getGlassesInfo側の結果はLanguage診断画面の表示にのみ使い、detectLocaleの引数には渡さないこと。
+ */
+async function resolveDeviceLocaleDiagnostics(bridge: BridgeLike): Promise<DeviceLocaleDiagnostics> {
+  let deviceInfoResolved = false
+  let deviceInfoLocaleRaw: string | null = null
+  try {
+    const info = await bridge.getDeviceInfo()
+    if (info) {
+      deviceInfoResolved = true
+      const raw = info.locale
+      if (typeof raw === 'string' && raw.length > 0) deviceInfoLocaleRaw = raw
+    }
+  } catch {
+    // 診断目的のbest-effort取得のため、失敗は無視する。
+  }
+
+  let glassesInfoResolved = false
+  let glassesInfoKeys: string[] = []
+  let glassesInfoLocaleRaw: string | null = null
+  try {
+    const raw = await bridge.callEvenApp('getGlassesInfo')
+    if (raw && typeof raw === 'object') {
+      glassesInfoResolved = true
+      const record = raw as Record<string, unknown>
+      glassesInfoKeys = Object.keys(record)
+      const rawLocale = record.locale
+      if (typeof rawLocale === 'string' && rawLocale.length > 0) glassesInfoLocaleRaw = rawLocale
+    }
+  } catch {
+    // 診断目的のbest-effort取得のため、失敗は無視する。
+  }
+
+  return { deviceInfoResolved, deviceInfoLocaleRaw, glassesInfoResolved, glassesInfoKeys, glassesInfoLocaleRaw }
+}
+
+/** 値が無い/空の場合に実機の画面上で分かるよう"(empty)"に変換する(診断画面専用)。 */
+function formatDiagnosticValue(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '(empty)'
+  return value
+}
+
+function formatDeviceInfoStatus(d: DeviceLocaleDiagnostics): string {
+  if (!d.deviceInfoResolved) return 'fail'
+  return `ok locale=${formatDiagnosticValue(d.deviceInfoLocaleRaw)}`
+}
+
+function formatGlassesInfoStatus(d: DeviceLocaleDiagnostics): string {
+  if (!d.glassesInfoResolved) return 'fail'
+  const keys = d.glassesInfoKeys.length > 0 ? d.glassesInfoKeys.join(',') : '(empty)'
+  return `ok keys=${keys} locale=${formatDiagnosticValue(d.glassesInfoLocaleRaw)}`
 }
 
 export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
@@ -340,6 +429,18 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   let editApplyAbortController: AbortController | null = null
   // 編集確定/削除確定で新規発行し、同一ユーザー操作の再試行時は使い回す(サーバー側の重複適用防止のため)。
   let currentMutationIdempotencyKey: string | null = null
+
+  // Language選択画面(Home menu 6番目)の状態。
+  let languageMenuIndex = 0
+  // start()で一度だけ取得したgetDeviceInfo()/callEvenApp('getGlassesInfo')の診断結果を
+  // Language診断画面表示のためにキャッシュしておく(毎回叩き直さない)。
+  let deviceLocaleDiagnostics: DeviceLocaleDiagnostics = {
+    deviceInfoResolved: false,
+    deviceInfoLocaleRaw: null,
+    glassesInfoResolved: false,
+    glassesInfoKeys: [],
+    glassesInfoLocaleRaw: null,
+  }
 
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null
   let firstChunkTimer: ReturnType<typeof setTimeout> | null = null
@@ -2246,6 +2347,80 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     await showScreen('notConnected', screens.notConnectedScreenText())
   }
 
+  // --- Language選択/診断画面(Home menu 6番目) ---
+
+  async function renderLanguageScreen(): Promise<void> {
+    await showScreen('language', screens.languageScreenText(languageMenuIndex))
+  }
+
+  /** ホーム画面の「言語」(6番目)の単押しでのみ呼ばれる。カーソル初期位置を現在のactiveLocaleに合わせる。 */
+  async function showLanguageScreen(): Promise<void> {
+    if (currentScreen !== 'home') return
+    const idx = screens.LANGUAGE_OPTIONS.findIndex((option) => option.locale === getActiveLocale())
+    languageMenuIndex = idx >= 0 ? idx : 0
+    await renderLanguageScreen()
+  }
+
+  async function moveLanguageMenuUp(): Promise<void> {
+    if (currentScreen !== 'language') return
+    languageMenuIndex = Math.max(0, languageMenuIndex - 1)
+    await renderLanguageScreen()
+  }
+
+  async function moveLanguageMenuDown(): Promise<void> {
+    if (currentScreen !== 'language') return
+    languageMenuIndex = Math.min(screens.LANGUAGE_OPTIONS.length - 1, languageMenuIndex + 1)
+    await renderLanguageScreen()
+  }
+
+  /** language画面の単押しでのみ呼ばれる。選択言語を確定・永続化し、新しいlocaleでホームへ戻る。 */
+  async function selectLanguageMenuItem(): Promise<void> {
+    if (currentScreen !== 'language') return
+    const option = screens.LANGUAGE_OPTIONS[languageMenuIndex]
+    if (!option) return
+    setActiveLocale(option.locale)
+    // Language画面での明示選択のみがstoredへ書き込む唯一の経路(start()は自動保存しない)。
+    await saveLocale(bridge, option.locale).catch(() => {})
+    await goHome()
+  }
+
+  /** language画面の二度押しでのみ呼ばれる。実機診断専用の生値を画面上に表示する。 */
+  async function showLanguageDiagnostics(): Promise<void> {
+    if (currentScreen !== 'language') return
+    const navigatorLanguagesRaw = globalThis.navigator?.languages ?? null
+    const navigatorLanguageRaw = globalThis.navigator?.language ?? null
+    const documentLangRaw = globalThis.document?.documentElement?.lang ?? null
+    let intlLocaleRaw: string | null = null
+    try {
+      intlLocaleRaw = Intl.DateTimeFormat().resolvedOptions().locale ?? null
+    } catch {
+      intlLocaleRaw = null
+    }
+    const storedRaw = await loadLocale(bridge).catch(() => null)
+
+    await showScreen(
+      'languageDiagnostics',
+      screens.languageDiagnosticsScreenText({
+        navigatorLanguages: formatDiagnosticValue(
+          navigatorLanguagesRaw && navigatorLanguagesRaw.length > 0 ? navigatorLanguagesRaw.join(',') : null,
+        ),
+        navigatorLanguage: formatDiagnosticValue(navigatorLanguageRaw),
+        documentLang: formatDiagnosticValue(documentLangRaw),
+        intlLocale: formatDiagnosticValue(intlLocaleRaw),
+        stored: formatDiagnosticValue(storedRaw),
+        active: getActiveLocale(),
+        deviceInfoStatus: formatDeviceInfoStatus(deviceLocaleDiagnostics),
+        glassesInfoStatus: formatGlassesInfoStatus(deviceLocaleDiagnostics),
+      }),
+    )
+  }
+
+  /** languageDiagnostics画面の単押し/二度押しの両方でのみ呼ばれる。言語選択画面へ戻る。 */
+  async function closeLanguageDiagnostics(): Promise<void> {
+    if (currentScreen !== 'languageDiagnostics') return
+    await renderLanguageScreen()
+  }
+
   async function handlePress(): Promise<void> {
     switch (currentScreen) {
       case 'home':
@@ -2257,9 +2432,12 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
           await startDayEvents('today')
         } else if (homeMenuIndex === 3) {
           await startDayEvents('tomorrow')
-        } else {
+        } else if (homeMenuIndex === 4) {
           // Phase 2K: 5番目(Googleカレンダーを再接続)。既存のペアリングフローをそのまま再利用する。
           await startPairingFlow()
+        } else {
+          // 6番目(言語選択)。
+          await showLanguageScreen()
         }
         return
       case 'recording':
@@ -2372,6 +2550,12 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       case 'pairingError':
         await showNotConnectedScreen()
         return
+      case 'language':
+        await selectLanguageMenuItem()
+        return
+      case 'languageDiagnostics':
+        await closeLanguageDiagnostics()
+        return
     }
   }
 
@@ -2474,6 +2658,12 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       case 'pairingError':
         await showNotConnectedScreen()
         return
+      case 'language':
+        await showLanguageDiagnostics()
+        return
+      case 'languageDiagnostics':
+        await closeLanguageDiagnostics()
+        return
     }
   }
 
@@ -2497,6 +2687,10 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     }
     if (currentScreen === 'eventDetailMenu') {
       await moveEventDetailMenuDown()
+      return
+    }
+    if (currentScreen === 'language') {
+      await moveLanguageMenuDown()
     }
   }
 
@@ -2520,6 +2714,10 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     }
     if (currentScreen === 'eventDetailMenu') {
       await moveEventDetailMenuUp()
+      return
+    }
+    if (currentScreen === 'language') {
+      await moveLanguageMenuUp()
     }
   }
 
@@ -2773,14 +2971,16 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   }
 
   async function start(): Promise<void> {
-    // ロケール解決(サーバへ送出するlocale query/bodyの値を決める)。Even Hub SDKにはlocale APIが
-    // 無いため、navigator.languages(複数形) > navigator.language(単数形) > 保存済み値(bridge、
-    // navigatorが一切使えない場合のみのフォールバック) > 'ja' の優先順で決定する。
-    // 明示的な言語選択UIが存在しない現状、保存済み値は「前回起動時にnavigatorから実際に検出できた
-    // 値のキャッシュ」に過ぎないため、常にライブのnavigator検出結果を優先する(古い保存値が
-    // 永久に上書きし続ける状態を避ける)。
-    // navigator.languages/navigator.languageがEven Realitiesアプリの表示言語設定と実際に連動しているかは
-    // 未確認(SDK/ドキュメントに記載なし)。唯一利用可能な自動検出手段のため使うが、確定仕様ではない。
+    // ロケール解決(サーバへ送出するlocale query/bodyの値、および画面表示言語を決める)。
+    // 優先順位: bridge.getDeviceInfo().locale(公開API。取得・正規化できた場合のみ、現行SDK実装では
+    // ほぼ確実にnull) > stored(Home menuの「Language」画面でユーザーが明示的に選択した値) >
+    // navigator.languages(複数形) > navigator.language(単数形) > 'ja'。
+    // Even Hub SDKには専用のlocale/language APIは無いため、navigator.languages/navigator.languageが
+    // Even RealitiesアプリのSystem language設定と実際に連動しているかは未確認(SDK/ドキュメントに
+    // 記載なし)。唯一利用可能な自動検出手段のため使うが、確定仕様ではない。ユーザーがLanguage画面で
+    // 明示的に選択した場合はその値(stored)がnavigator検出より優先される。
+    // start()自身はもはやstoredへ自動保存しない(自動検出結果の書き戻しは廃止)。storedへの書き込みは
+    // Language画面での明示選択時(selectLanguageMenuItem)のみ。
     // deps.locale指定時はテスト用の決定的注入として検出をスキップする。既存動作(locale未検出時の
     // 挙動)には一切影響しない(各クライアントはlocale未指定時と完全同一のURL/bodyになる設計のため)。
     const navigatorLanguagesRaw = globalThis.navigator?.languages ?? null
@@ -2790,8 +2990,12 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     if (configuredLocale) {
       resolvedLocale = configuredLocale
     } else {
+      // getDeviceInfo()(公開API)とcallEvenApp('getGlassesInfo')(未文書化・診断専用)の両方を
+      // best-effortで試す。後者はdetectLocaleの優先順位ロジックには使わず、Language診断画面表示専用。
+      deviceLocaleDiagnostics = await resolveDeviceLocaleDiagnostics(bridge)
       storedLocaleRaw = await loadLocale(bridge).catch(() => null)
       resolvedLocale = detectLocale({
+        deviceLocale: deviceLocaleDiagnostics.deviceInfoLocaleRaw,
         stored: storedLocaleRaw,
         navigatorLanguages: navigatorLanguagesRaw,
         navigatorLanguage: navigatorLanguageRaw,
@@ -2808,12 +3012,6 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       navigatorLanguageRaw,
       storedLocaleRaw,
     })
-
-    // 解決結果を毎回永続化する。stored値は「ユーザーの意図的な選択」ではなく「前回起動時に実際に
-    // 検出できた値のキャッシュ」であるべきため、毎回上書きして古い値を残さない。失敗してもloadLocale
-    // /saveBackendAvailable同様catchして無視する(ロケール解決自体は既にactiveLocaleへ反映済みのため、
-    // 保存の成否はstart()自体の成功を左右しない)。
-    await saveLocale(bridge, resolvedLocale).catch(() => {})
 
     // devセッションが有効な間はdevモード(既存動作を変えない)。製品モードでは、有効な
     // device credential(refresh tokenが未失効)を既に保持していればホームへ、なければ
@@ -2870,5 +3068,6 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     getEditRecordingContext: () => editRecordingContext,
     getEditAnalysisContext: () => editAnalysisContext,
     getEditApplyContext: () => editApplyContext,
+    getLanguageMenuIndex: () => languageMenuIndex,
   }
 }

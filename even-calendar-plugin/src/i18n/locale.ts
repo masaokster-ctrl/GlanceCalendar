@@ -2,7 +2,8 @@
 //
 // Even Hub SDKにはlocale/language APIが存在しない(getUserInfo()は{uid,name,avatar,country}、
 // getDeviceInfo()は{model,sn,status}のみで、typingsにlocale/languageの語は無い)。countryを
-// 言語の代理として使うのは誤りなので採用しない。
+// 言語の代理として使うのは誤りなので採用しない。そのため、Home menuの「Language」画面で
+// ユーザーが明示的に選択した値を最優先の signal として扱う(navigator検出は補助手段)。
 //
 // detectLocale()はnavigatorを直接参照しない純関数(vitestはenvironment:'node'のため)。
 // 呼び出し側(app.ts/main.ts)がglobalThis.navigator?.languagesを読んで注入すること。
@@ -28,10 +29,19 @@ function primarySubtagLocale(tag: string): Locale | null {
 
 export interface DetectLocaleParams {
   /**
-   * 永続化済みの値。この関数内では「navigatorが一切使えない場合のみのフォールバック」としてのみ使う
-   * (最優先ではない)。アプリ独自の言語選択UIが存在しない現状、永続値は「前回起動時にnavigatorから
-   * 実際に検出できた値のキャッシュ」に過ぎず、ユーザーの意図的な選択ではない。過去に書き込まれた値が
-   * 現在のnavigator検出結果を永久に上書きする状態を避けるため、常にnavigatorを優先する。
+   * bridge.getDeviceInfo().locale(公開API)から取得できた生の言語タグ。現行SDK実装ではDeviceInfoに
+   * localeフィールドは存在しない可能性が高いため、通常はnull/undefinedになる想定だが、公式FAQが
+   * この経路の参照を案内しているため、実際に値が返ってきた場合は他の何よりも優先する。
+   * 未文書化の内部メソッド(callEvenApp('getGlassesInfo')等)の結果はここに含めないこと
+   * (診断表示専用。SDKの将来のアップデートで予告なく壊れうる未文書化APIに製品ロジックを依存させない)。
+   */
+  deviceLocale?: string | null | undefined
+  /**
+   * ユーザーがLanguage画面で明示的に選択した言語の永続値(bridge storage)。deviceLocaleに次ぐ
+   * signalとして扱う。書き込まれるのはLanguage画面での明示選択時のみ(app.tsのstart()は
+   * もはや自動検出結果をここへ書き戻さない)。navigator.languages/navigator.languageがEven
+   * RealitiesアプリのSystem language設定と実際に連動しているかは未確認である一方、この値は
+   * ユーザー自身が明示的に選んだ結果であるため、navigatorの検出結果より優先する。
    */
   stored: string | null | undefined
   /** 通常はglobalThis.navigator?.languagesをそのまま渡す。先頭要素のprimary subtagのみを見る。 */
@@ -44,14 +54,23 @@ export interface DetectLocaleParams {
 }
 
 /**
- * 優先順位: navigatorLanguagesの先頭要素のprimary subtag > navigatorLanguage(単数形)のprimary subtag >
- * stored('ja'|'en'のみ受理、navigatorが一切使えない場合のみのフォールバック) > 'ja'。
+ * 優先順位: deviceLocale(bridge.getDeviceInfo().localeの公開APIから取得・正規化できた場合のみ) >
+ * stored(ユーザーがLanguage画面で明示的に選択した値。'ja'|'en'のみ受理) >
+ * navigatorLanguagesの先頭要素のprimary subtag > navigatorLanguage(単数形)のprimary subtag > 'ja'。
  *
  * 注意: navigator.languages/navigator.languageがEven Realitiesアプリ自体の「表示言語」設定と
  * 実際に連動しているかどうかは未確認(SDK/ドキュメントに記載なし、plugin実行環境はFlutter WebView)。
- * これは唯一利用可能な自動検出手段であるため使用するが、確定した仕様として書いているわけではない。
+ * これは自動検出の唯一の手段であるため、deviceLocaleもユーザーの明示選択(stored)も無い間の
+ * フォールバックとして引き続き使用するが、確定した仕様として書いているわけではない。
  */
 export function detectLocale(params: DetectLocaleParams): Locale {
+  if (typeof params.deviceLocale === 'string') {
+    const locale = primarySubtagLocale(params.deviceLocale)
+    if (locale) return locale
+  }
+
+  if (isSupportedLocale(params.stored)) return params.stored
+
   const primaryTag = params.navigatorLanguages?.[0]
   if (typeof primaryTag === 'string') {
     const locale = primarySubtagLocale(primaryTag)
@@ -62,8 +81,6 @@ export function detectLocale(params: DetectLocaleParams): Locale {
     const locale = primarySubtagLocale(params.navigatorLanguage)
     if (locale) return locale
   }
-
-  if (isSupportedLocale(params.stored)) return params.stored
 
   return 'ja'
 }
