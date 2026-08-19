@@ -1,9 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import type { Clock } from '../time/clock.js';
 import { readCookie } from '../security/cookies.js';
 import { logSafeEvent } from '../security/safeLogger.js';
 import { hashValue } from '../security/devSessionToken.js';
 import { normalizeUserCodeInput } from '../product/userCode.js';
+import { PRODUCT_HISTORY_RETURN_MARKER_STORAGE_KEY } from '../product/productHistoryReturnMarker.js';
 import type { PluginRateLimitRepository } from '../firestore/pluginRateLimitRepository.js';
 import type { ProductPairingRepository } from '../product/productPairingRepository.js';
 import type { ProductSigningKeyProvider } from '../product/productSigningKey.js';
@@ -28,15 +30,57 @@ export interface ProductConnectPageRouterDeps {
   rateLimitPerMinute?: number;
 }
 
-function securityHeaders(res: Response): void {
+// scriptNonceは/connect表示時にhistory起点を記録するインラインscript用。省略時(/connect/verify等)は
+// 従来どおりscript-srcを一切許可しない。
+function securityHeaders(res: Response, scriptNonce?: string): void {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  const scriptSrc = scriptNonce ? ` script-src 'nonce-${scriptNonce}';` : '';
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    `default-src 'none'; style-src 'unsafe-inline';${scriptSrc} form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
   );
   res.setHeader('X-Frame-Options', 'DENY');
+}
+
+// /connect表示時のhistory.lengthをsessionStorageへ記録する。OAuth成功ページの「Even Calendarへ戻る」
+// ボタンが history.go(-N) のNを算出するための起点(startHistoryLength)として使う。
+//
+// Googleの未確認アプリ警告・再ログイン・アカウント選択・/connect/verifyの再訪等、同一OAuthフロー中に
+// back-navigationで/connectへ戻ってくることがある。その場合にこのscriptを無条件に再実行すると、
+// 元のstartHistoryLengthを新しい値で上書きしてしまい、以後のNの計算が狂う(実機検証で確認済みの不具合)。
+// navigation type(back_forward)を判定し、back_forward再訪かつ既存markerがある場合は上書きしない。
+// 一方、通常の新規navigate(新しいpairingフローの開始)では必ず新しいstartHistoryLengthで上書きする
+// (古いフローのmarkerを次のpairingへ誤って持ち越さないため)。
+function historyMarkerScript(nonce: string): string {
+  return `<script nonce="${nonce}">
+(function () {
+  var STORAGE_KEY = '${PRODUCT_HISTORY_RETURN_MARKER_STORAGE_KEY}';
+  var navType = 'navigate';
+  try {
+    var entries = window.performance && performance.getEntriesByType ? performance.getEntriesByType('navigation') : [];
+    if (entries && entries[0] && entries[0].type) {
+      navType = entries[0].type;
+    } else if (window.performance && performance.navigation) {
+      var legacyType = performance.navigation.type;
+      navType = legacyType === 2 ? 'back_forward' : (legacyType === 1 ? 'reload' : 'navigate');
+    }
+  } catch (e) { navType = 'navigate'; }
+  var isBackForward = navType === 'back_forward';
+  var existing = null;
+  try {
+    var raw = sessionStorage.getItem(STORAGE_KEY);
+    existing = raw ? JSON.parse(raw) : null;
+  } catch (e) { existing = null; }
+  if (isBackForward && existing && typeof existing.startHistoryLength === 'number') {
+    return;
+  }
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ startHistoryLength: window.history.length }));
+  } catch (e) {}
+})();
+</script>`;
 }
 
 function escapeHtml(value: string): string {
@@ -55,7 +99,9 @@ button{font-size:16px;padding:12px;width:100%;box-sizing:border-box}
 .button-link{display:block;font-size:16px;padding:12px;width:100%;box-sizing:border-box;text-align:center;text-decoration:none;color:#222;background:#f0f0f0;border:1px solid #ccc;border-radius:4px}
 .error{color:#b00020}.privacy{font-size:12px;color:#777}`;
 
-function renderConnectForm(csrfToken: string, errorMessage: string | null): string {
+// 第3引数nonceはhistory起点記録用のインラインscriptに使う(省略時はscript-src自体を付与しない)。
+function renderConnectForm(csrfToken: string, errorMessage: string | null, historyNonce?: string): string {
+  const historyScript = historyNonce ? historyMarkerScript(historyNonce) : '';
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar with Gemini - 接続</title><style>${PAGE_STYLE}</style></head><body>
 <h1>Calendar with Gemini</h1>
 <p>Even G2に表示されているペアリングコードを入力してください。</p>
@@ -66,6 +112,7 @@ ${errorMessage ? `<p class="error">${escapeHtml(errorMessage)}</p>` : ''}
 <button type="submit">次へ</button>
 </form>
 <p class="privacy">音声・文字起こし・カレンダーの予定内容はこのページでは保存・送信されません。接続にはGoogleアカウントでのログインとCalendarへのアクセス許可が必要です。</p>
+${historyScript}
 </body></html>`;
 }
 
@@ -108,7 +155,8 @@ export function createProductConnectPageRouter(deps: ProductConnectPageRouterDep
   }
 
   router.get('/connect', (req: Request, res: Response) => {
-    securityHeaders(res);
+    const historyNonce = randomBytes(16).toString('base64');
+    securityHeaders(res, historyNonce);
     if (!deps.signingKeyProvider.available) {
       res.status(503).type('html').send(renderNotConfiguredPage());
       return;
@@ -118,7 +166,7 @@ export function createProductConnectPageRouter(deps: ProductConnectPageRouterDep
       csrfToken = createCsrfToken(deps.signingKeyProvider, deps.clock);
       res.cookie(CSRF_TOKEN_COOKIE_NAME, csrfToken, { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: CSRF_TOKEN_TTL_MS });
     }
-    res.status(200).type('html').send(renderConnectForm(csrfToken, null));
+    res.status(200).type('html').send(renderConnectForm(csrfToken, null, historyNonce));
   });
 
   router.post('/connect/verify', async (req: Request, res: Response) => {

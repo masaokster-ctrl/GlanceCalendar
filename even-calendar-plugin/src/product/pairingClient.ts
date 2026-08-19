@@ -177,6 +177,10 @@ export interface ExchangePairingParams {
   baseUrl: string
   pairingId: string
   installationId: string
+  /** Plugin側でCSPRNG生成済みのcredential候補(生値・64桁hex)。Backendはこれをhash化して登録するだけで、
+   *  自分では生成しない(client-generated credential方式)。 */
+  accessToken: string
+  refreshToken: string
   signal?: AbortSignal
   timeoutMs?: number
 }
@@ -203,7 +207,7 @@ export async function exchangePairing(params: ExchangePairingParams): Promise<Ex
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ installationId: params.installationId }),
+      body: JSON.stringify({ installationId: params.installationId, accessToken: params.accessToken, refreshToken: params.refreshToken }),
     },
     params.signal,
     timeoutMs,

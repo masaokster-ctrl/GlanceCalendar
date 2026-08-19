@@ -358,12 +358,13 @@ describe('Phase 2H product pairing screens', () => {
     expect(text).toContain('二度押し: 終了')
   })
 
-  it('pairing screen shows the verification URL, the code, and a waiting/cancel hint', () => {
-    const text = screens.pairingScreenText('backend.test/connect', 'ABCD-EFGH')
-    expect(text).toContain('backend.test/connect')
+  it('pairing screen shows the fixed "open Even Realities on your phone" guidance, the code, and a waiting/cancel hint (no URL)', () => {
+    const text = screens.pairingScreenText('ABCD-EFGH')
+    expect(text).toContain('Even Realities')
     expect(text).toContain('ABCD-EFGH')
     expect(text).toContain('接続待ち')
     expect(text).toContain('二度押し: 中止')
+    expect(text).not.toContain('http')
   })
 
   it('pairing success screen shows the menu hint', () => {

@@ -114,7 +114,11 @@ interface ScreenStrings {
   notConnectedLine1: string
   notConnectedLine2: string
   hintPressStartPairing: string
-  openOnPhone: string
+  pairingTitle: string
+  pairingGuideLine1: string
+  pairingGuideLine2: string
+  pairingGuideLine3: string
+  pairingCodeLabel: string
   waitingForConnection: string
   connected: string
   hintPressToMenu: string
@@ -216,7 +220,11 @@ const JA: ScreenStrings = {
   notConnectedLine1: 'Googleカレンダーとの',
   notConnectedLine2: '接続が必要です',
   hintPressStartPairing: '押す: 接続を開始',
-  openOnPhone: 'スマートフォンで開く',
+  pairingTitle: 'Google Calendarを接続',
+  pairingGuideLine1: 'スマートフォンで',
+  pairingGuideLine2: 'Even Realitiesを',
+  pairingGuideLine3: '開いてください',
+  pairingCodeLabel: '認証コード',
   waitingForConnection: '接続待ち...',
   connected: '接続しました',
   hintPressToMenu: '押す: メニューへ',
@@ -325,7 +333,11 @@ const EN: ScreenStrings = {
   notConnectedLine1: 'Connect your',
   notConnectedLine2: 'Google Calendar',
   hintPressStartPairing: 'Press: connect',
-  openOnPhone: 'Open on your phone',
+  pairingTitle: 'Connect Google Calendar',
+  pairingGuideLine1: 'On your phone,',
+  pairingGuideLine2: 'open Even',
+  pairingGuideLine3: 'Realities',
+  pairingCodeLabel: 'Code',
   waitingForConnection: 'Waiting...',
   connected: 'Connected',
   hintPressToMenu: 'Press: menu',
@@ -609,9 +621,25 @@ export function notConnectedScreenText(): string {
   return [s().appName, s().notConnectedLine1, s().notConnectedLine2, '', s().hintPressStartPairing, s().hintDoubleExit].join('\n')
 }
 
-/** verificationUrlは短縮済み表示用の文字列であること前提(呼び出し側で整形)。 */
-export function pairingScreenText(verificationUrl: string, userCode: string): string {
-  return [s().openOnPhone, verificationUrl, userCode, '', s().waitingForConnection, s().hintDoubleAbort].join('\n')
+/**
+ * GlassにはURLを一切表示しない(スマートフォンでEven Realitiesを開いてもらう固定の案内文のみ)。
+ * userCodeが空文字列の場合(startPairingFlow開始直後、まだBackend応答が来ていない一瞬)は
+ * コード行が空行になるだけで、レイアウト自体は崩れない。
+ */
+export function pairingScreenText(userCode: string): string {
+  return [
+    s().pairingTitle,
+    '',
+    s().pairingGuideLine1,
+    s().pairingGuideLine2,
+    s().pairingGuideLine3,
+    '',
+    s().pairingCodeLabel,
+    userCode,
+    '',
+    s().waitingForConnection,
+    s().hintDoubleAbort,
+  ].join('\n')
 }
 
 export function pairingSuccessScreenText(): string {

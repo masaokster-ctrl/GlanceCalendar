@@ -113,48 +113,6 @@ describe('ProductPairingRepository — status transitions', () => {
   });
 });
 
-describe('ProductPairingRepository — markExchangedIfApproved (one-time transactional exchange)', () => {
-  async function approvedRepo(): Promise<InMemoryProductPairingRepository> {
-    const repo = new InMemoryProductPairingRepository();
-    await repo.create({ pairingId: PAIRING_ID, userCodeHash: CODE_HASH, installationIdHash: INSTALL_HASH, now: NOW, expiresAt: tenMinutesLater() });
-    await repo.markApproved(PAIRING_ID, 'user-1', NOW);
-    return repo;
-  }
-
-  it('transitions approved -> exchanged exactly once and returns the doc', async () => {
-    const repo = await approvedRepo();
-    const result = await repo.markExchangedIfApproved(PAIRING_ID, INSTALL_HASH, NOW);
-    expect(result.kind).toBe('exchanged');
-    if (result.kind === 'exchanged') {
-      expect(result.doc.status).toBe('exchanged');
-      expect(result.doc.userId).toBe('user-1');
-    }
-    expect((await repo.getById(PAIRING_ID))?.status).toBe('exchanged');
-  });
-
-  it('returns already_exchanged on a second (replayed) exchange attempt', async () => {
-    const repo = await approvedRepo();
-    await repo.markExchangedIfApproved(PAIRING_ID, INSTALL_HASH, NOW);
-    const second = await repo.markExchangedIfApproved(PAIRING_ID, INSTALL_HASH, NOW);
-    expect(second.kind).toBe('already_exchanged');
-  });
-
-  it('returns not_approved when the pairing is still pending', async () => {
-    const repo = new InMemoryProductPairingRepository();
-    await repo.create({ pairingId: PAIRING_ID, userCodeHash: CODE_HASH, installationIdHash: INSTALL_HASH, now: NOW, expiresAt: tenMinutesLater() });
-    const result = await repo.markExchangedIfApproved(PAIRING_ID, INSTALL_HASH, NOW);
-    expect(result.kind).toBe('not_approved');
-  });
-
-  it('returns not_found for an unknown pairingId', async () => {
-    const repo = new InMemoryProductPairingRepository();
-    const result = await repo.markExchangedIfApproved('unknown', INSTALL_HASH, NOW);
-    expect(result.kind).toBe('not_found');
-  });
-
-  it('returns installation_mismatch when the installationIdHash does not match', async () => {
-    const repo = await approvedRepo();
-    const result = await repo.markExchangedIfApproved(PAIRING_ID, 'different-install-hash', NOW);
-    expect(result.kind).toBe('installation_mismatch');
-  });
-});
+// exchange(approved→exchanged遷移・credential発行)のテストは productExchangeCoordinator.test.ts へ移動した
+// (ProductPairingRepository単独のtransactionではpluginSessions/productDeviceRefreshTokens/
+// productInstallationsとのatomic性を保証できないため、専任のcoordinatorに責務を移したことに伴う)。

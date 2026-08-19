@@ -260,6 +260,14 @@ export interface ProductPairingSessionDoc {
   attemptCount: number;
   lastPollAt: Date | null;
   sanitizedErrorCode: string | null;
+  /**
+   * client-generated credential方式(Plugin側がaccess/refresh token候補を生成しhashのみ送信する)の
+   * 冪等キー。一度セットされたら別の値へは書き換えない。同じhashペアの再送は冪等replayとして成功、
+   * 異なるhashペアはhash_mismatchとして拒否する(exchangedAtはreplayのたびに更新してよいが、
+   * これらのhash自体・pluginSessions/productDeviceRefreshTokensの中身は初回確定時のまま不変)。
+   */
+  exchangeAccessTokenHash: string | null;
+  exchangeRefreshTokenHash: string | null;
 }
 
 /**

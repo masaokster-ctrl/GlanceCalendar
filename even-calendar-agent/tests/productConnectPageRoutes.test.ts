@@ -6,6 +6,7 @@ import { InMemoryPluginRateLimitRepository } from '../src/firestore/pluginRateLi
 import { hashValue } from '../src/security/devSessionToken.js';
 import { fixedClock } from '../src/time/clock.js';
 import { ProductSigningKeyProvider } from '../src/product/productSigningKey.js';
+import { PRODUCT_HISTORY_RETURN_MARKER_STORAGE_KEY } from '../src/product/productHistoryReturnMarker.js';
 
 const NOW = new Date('2026-07-23T05:00:00Z');
 const INSTALL_HASH = 'install-hash-1';
@@ -65,6 +66,43 @@ describe('GET /connect', () => {
     const res = await request(app).get('/connect');
     expect(res.text).toContain('音声');
     expect(res.text).toContain('カレンダー');
+  });
+
+  describe('history-return marker (used by the OAuth success page\'s "Even Calendarへ戻る" button)', () => {
+    it('embeds the marker-recording script with a nonce that matches the CSP header', async () => {
+      const { app } = setup();
+      const res = await request(app).get('/connect');
+      const csp = res.headers['content-security-policy'] as string;
+      const match = /script-src 'nonce-([^']+)'/.exec(csp);
+      expect(match).not.toBeNull();
+      const nonce = match?.[1];
+      expect(res.text).toContain(`<script nonce="${nonce}">`);
+      expect(res.text).toContain(PRODUCT_HISTORY_RETURN_MARKER_STORAGE_KEY);
+      expect(res.text).toContain('window.history.length');
+    });
+
+    it('still keeps form-action \'self\' alongside the script-src nonce', async () => {
+      const { app } = setup();
+      const res = await request(app).get('/connect');
+      const csp = res.headers['content-security-policy'] as string;
+      expect(csp).toContain("form-action 'self'");
+    });
+
+    it('detects back_forward navigation and skips overwriting an existing marker on same-flow revisits', async () => {
+      const { app } = setup();
+      const res = await request(app).get('/connect');
+      expect(res.text).toContain("navType === 'back_forward'");
+      expect(res.text).toContain('performance.navigation.type');
+    });
+
+    it('does not expose internal diagnostics (no visible probe text or console.log)', async () => {
+      const { app } = setup();
+      const res = await request(app).get('/connect');
+      expect(res.text).not.toContain('console.log');
+      expect(res.text).not.toContain('id="temp-history-probe"');
+      expect(res.text).not.toMatch(/PHASE TEMP/i);
+      expect(res.text).not.toContain('flowId');
+    });
   });
 
   it('escapes HTML in rendered error messages (XSS defense)', async () => {

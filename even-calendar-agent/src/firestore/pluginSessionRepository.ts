@@ -81,9 +81,10 @@ export class FirestorePluginSessionRepository implements PluginSessionRepository
   }
 }
 
-/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。 */
+/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。
+ *  storeを外部から注入できるのは、ProductExchangeCoordinator(InMemory版)と同じMapを共有するため。 */
 export class InMemoryPluginSessionRepository implements PluginSessionRepository {
-  private readonly store = new Map<string, PluginSessionDoc>();
+  constructor(private readonly store: Map<string, PluginSessionDoc> = new Map()) {}
 
   async create(params: CreateSessionParams): Promise<void> {
     this.store.set(params.tokenHash, {

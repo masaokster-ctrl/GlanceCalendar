@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { initialPairingContext, pairingReducer } from '../../src/product/pairingState'
 
+const EXPIRES_AT = Date.now() + 600_000
+
 describe('pairingReducer', () => {
   it('starts idle', () => {
     expect(initialPairingContext.state).toBe('idle')
@@ -11,20 +13,38 @@ describe('pairingReducer', () => {
     expect(ctx.state).toBe('starting')
   })
 
-  it('STARTED -> waitingApproval with pairing details populated', () => {
+  it('STARTED -> waitingApproval with pairing details populated (no verificationUrl field; expiresAt is an absolute timestamp)', () => {
     const ctx = pairingReducer(initialPairingContext, {
       type: 'STARTED',
       pairingId: 'p-1',
-      verificationUrl: 'https://backend.test/connect',
       userCode: 'ABCD-EFGH',
       pollIntervalSeconds: 3,
+      expiresAt: EXPIRES_AT,
     })
     expect(ctx).toEqual({
       state: 'waitingApproval',
       pairingId: 'p-1',
-      verificationUrl: 'https://backend.test/connect',
       userCode: 'ABCD-EFGH',
       pollIntervalSeconds: 3,
+      expiresAt: EXPIRES_AT,
+      errorKind: null,
+    })
+  })
+
+  it('RESTORED -> waitingApproval, identical shape to STARTED (used for BOOT-time resume from pairingResumeStore)', () => {
+    const ctx = pairingReducer(initialPairingContext, {
+      type: 'RESTORED',
+      pairingId: 'p-1',
+      userCode: 'ABCD-EFGH',
+      pollIntervalSeconds: 3,
+      expiresAt: EXPIRES_AT,
+    })
+    expect(ctx).toEqual({
+      state: 'waitingApproval',
+      pairingId: 'p-1',
+      userCode: 'ABCD-EFGH',
+      pollIntervalSeconds: 3,
+      expiresAt: EXPIRES_AT,
       errorKind: null,
     })
   })
@@ -39,9 +59,9 @@ describe('pairingReducer', () => {
     const started = pairingReducer(initialPairingContext, {
       type: 'STARTED',
       pairingId: 'p-1',
-      verificationUrl: 'url',
       userCode: 'code',
       pollIntervalSeconds: 3,
+      expiresAt: EXPIRES_AT,
     })
     const ctx = pairingReducer(started, { type: 'APPROVED' })
     expect(ctx.state).toBe('exchanging')
@@ -78,9 +98,9 @@ describe('pairingReducer', () => {
     const started = pairingReducer(initialPairingContext, {
       type: 'STARTED',
       pairingId: 'p-1',
-      verificationUrl: 'url',
       userCode: 'code',
       pollIntervalSeconds: 3,
+      expiresAt: EXPIRES_AT,
     })
     expect(pairingReducer(started, { type: 'RESET' })).toEqual(initialPairingContext)
   })

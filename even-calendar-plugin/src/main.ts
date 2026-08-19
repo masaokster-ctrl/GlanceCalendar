@@ -1,6 +1,6 @@
 import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk'
 import { createApp } from './app'
-import { mountUi, setCompanionStatus } from './ui'
+import { mountUi, setCompanionStatus, setConnectActionVisible } from './ui'
 import { BridgeProductTokenStore } from './product/tokenStore'
 import { getOrCreateInstallationId } from './product/installationId'
 
@@ -12,7 +12,7 @@ const bridge = await waitForEvenAppBridge()
 const tokenStore = new BridgeProductTokenStore(bridge)
 const productInstallationId = await getOrCreateInstallationId(bridge)
 
-const app = createApp(bridge, { tokenStore, productInstallationId })
+const app = createApp(bridge, { tokenStore, productInstallationId, onPairingScreenActive: setConnectActionVisible })
 
 await app.start()
 setCompanionStatus('準備完了 — G2側の画面を確認してください')

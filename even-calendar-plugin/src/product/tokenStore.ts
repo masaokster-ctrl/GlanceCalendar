@@ -8,6 +8,14 @@
 // 保持する)。永続化するのはrotating refresh tokenのみで、アプリ再起動後は必ずrefresh経由で
 // 新しいaccess tokenを取得し直す。installationIdもここには含めない(別途installationId.tsで
 // 独立して永続化される、静的に既知の値のため)。
+//
+// 【例外(pairing exchange再開のための限定的な方針変更)】exchange完了(このTokenStoreへのsave成功)
+// より前の、pairing進行中(approved検知〜exchange確定まで)のaccess/refresh token候補に限っては、
+// 別モジュール(pairingResumeStore.ts)がbridge.setLocalStorage経由で一時的に永続化する。これは
+// 「確定済みaccess tokenはメモリのみ」という上記方針そのものを変更するものではなく、JS再起動を
+// またいでpairing exchangeを安全に再開するためだけの、pairing処理中に限定した別レイヤーの一時保存
+// である。pairingResumeStore側は、tokenStore.save()成功・cancel・expired・failedのいずれかで
+// 必ず削除される(詳細はpairingResumeStore.tsを参照)。
 
 export interface PersistedProductCredential {
   refreshToken: string

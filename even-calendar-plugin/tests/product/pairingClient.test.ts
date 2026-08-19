@@ -105,34 +105,75 @@ describe('cancelPairing', () => {
 describe('exchangePairing', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('returns success with the device session fields', async () => {
+  const CANDIDATE_ACCESS_TOKEN = 'a'.repeat(64)
+  const CANDIDATE_REFRESH_TOKEN = 'b'.repeat(64)
+
+  it('sends the client-generated accessToken/refreshToken candidate in the request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        accessToken: CANDIDATE_ACCESS_TOKEN,
+        accessTokenExpiresInSeconds: 900,
+        refreshToken: CANDIDATE_REFRESH_TOKEN,
+        refreshTokenExpiresAt: '2026-08-22T05:00:00.000Z',
+        scopes: ['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read'],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await exchangePairing({
+      baseUrl: BASE_URL,
+      pairingId: PAIRING_ID,
+      installationId: INSTALL_ID,
+      accessToken: CANDIDATE_ACCESS_TOKEN,
+      refreshToken: CANDIDATE_REFRESH_TOKEN,
+    })
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const sentBody = JSON.parse(init.body as string)
+    expect(sentBody.accessToken).toBe(CANDIDATE_ACCESS_TOKEN)
+    expect(sentBody.refreshToken).toBe(CANDIDATE_REFRESH_TOKEN)
+  })
+
+  it('returns success with the device session fields (Backend echoes back the submitted candidate)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         jsonResponse(200, {
-          accessToken: 'at-1',
+          accessToken: CANDIDATE_ACCESS_TOKEN,
           accessTokenExpiresInSeconds: 900,
-          refreshToken: 'rt-1',
+          refreshToken: CANDIDATE_REFRESH_TOKEN,
           refreshTokenExpiresAt: '2026-08-22T05:00:00.000Z',
           scopes: ['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read'],
         }),
       ),
     )
-    const outcome = await exchangePairing({ baseUrl: BASE_URL, pairingId: PAIRING_ID, installationId: INSTALL_ID })
+    const outcome = await exchangePairing({
+      baseUrl: BASE_URL,
+      pairingId: PAIRING_ID,
+      installationId: INSTALL_ID,
+      accessToken: CANDIDATE_ACCESS_TOKEN,
+      refreshToken: CANDIDATE_REFRESH_TOKEN,
+    })
     expect(outcome.kind).toBe('success')
     if (outcome.kind === 'success') {
-      expect(outcome.accessToken).toBe('at-1')
-      expect(outcome.refreshToken).toBe('rt-1')
+      expect(outcome.accessToken).toBe(CANDIDATE_ACCESS_TOKEN)
+      expect(outcome.refreshToken).toBe(CANDIDATE_REFRESH_TOKEN)
     }
   })
 
-  it('maps 409 to not_ready', async () => {
+  it('maps 409 to not_ready (e.g. hash_mismatch from a stale/differing candidate)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 409 })))
-    expect((await exchangePairing({ baseUrl: BASE_URL, pairingId: PAIRING_ID, installationId: INSTALL_ID })).kind).toBe('not_ready')
+    expect(
+      (
+        await exchangePairing({ baseUrl: BASE_URL, pairingId: PAIRING_ID, installationId: INSTALL_ID, accessToken: CANDIDATE_ACCESS_TOKEN, refreshToken: CANDIDATE_REFRESH_TOKEN })
+      ).kind,
+    ).toBe('not_ready')
   })
 
-  it('maps 400 to not_ready', async () => {
+  it('maps 400 to not_ready (e.g. malformed candidate format)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 400 })))
-    expect((await exchangePairing({ baseUrl: BASE_URL, pairingId: PAIRING_ID, installationId: INSTALL_ID })).kind).toBe('not_ready')
+    expect(
+      (
+        await exchangePairing({ baseUrl: BASE_URL, pairingId: PAIRING_ID, installationId: INSTALL_ID, accessToken: CANDIDATE_ACCESS_TOKEN, refreshToken: CANDIDATE_REFRESH_TOKEN })
+      ).kind,
+    ).toBe('not_ready')
   })
 })

@@ -77,9 +77,10 @@ export class FirestoreProductInstallationRepository implements ProductInstallati
   }
 }
 
-/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。 */
+/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。
+ *  storeを外部から注入できるのは、ProductExchangeCoordinator(InMemory版)と同じMapを共有するため。 */
 export class InMemoryProductInstallationRepository implements ProductInstallationRepository {
-  private readonly store = new Map<string, ProductInstallationDoc>();
+  constructor(private readonly store: Map<string, ProductInstallationDoc> = new Map()) {}
 
   async getOrCreate(params: CreateInstallationParams): Promise<ProductInstallationDoc> {
     const existing = this.store.get(params.installationId);

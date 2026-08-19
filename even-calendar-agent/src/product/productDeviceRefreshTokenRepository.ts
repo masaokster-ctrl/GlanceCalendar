@@ -94,9 +94,10 @@ export class FirestoreProductDeviceRefreshTokenRepository implements ProductDevi
   }
 }
 
-/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。 */
+/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。
+ *  storeを外部から注入できるのは、ProductExchangeCoordinator(InMemory版)と同じMapを共有するため。 */
 export class InMemoryProductDeviceRefreshTokenRepository implements ProductDeviceRefreshTokenRepository {
-  private readonly store = new Map<string, ProductDeviceRefreshTokenDoc>();
+  constructor(private readonly store: Map<string, ProductDeviceRefreshTokenDoc> = new Map()) {}
 
   async create(params: CreateRefreshTokenParams): Promise<void> {
     this.store.set(params.refreshTokenHash, buildDoc(params));

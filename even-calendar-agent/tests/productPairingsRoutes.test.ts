@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createTestApp } from './testHelpers.js';
@@ -5,32 +6,47 @@ import { InMemoryProductPairingRepository } from '../src/product/productPairingR
 import { InMemoryProductInstallationRepository } from '../src/product/productInstallationRepository.js';
 import { InMemoryProductAuditRepository } from '../src/product/productAuditRepository.js';
 import { InMemoryProductDeviceRefreshTokenRepository } from '../src/product/productDeviceRefreshTokenRepository.js';
+import { InMemoryProductExchangeCoordinator } from '../src/product/productExchangeCoordinator.js';
 import { InMemoryPluginRateLimitRepository } from '../src/firestore/pluginRateLimitRepository.js';
 import { InMemoryPluginSessionRepository } from '../src/firestore/pluginSessionRepository.js';
 import { fixedClock } from '../src/time/clock.js';
 import { hashValue } from '../src/security/devSessionToken.js';
+import type { ProductPairingSessionDoc, ProductInstallationDoc, PluginSessionDoc, ProductDeviceRefreshTokenDoc } from '../src/firestore/models.js';
 
 const NOW = new Date('2026-07-23T05:00:00Z');
 const INSTALL_ID = '11111111-1111-4111-8111-111111111111';
 
+/** client-generated credential方式のテスト用candidate。実運用のcrypto.getRandomValues(32bytes)と
+ *  同じ64桁hex形式。 */
+function randomCredentialCandidate(): string {
+  return randomBytes(32).toString('hex');
+}
+
 function setup(opts: { rateLimitPerMinute?: number; now?: Date } = {}) {
-  const productPairingRepo = new InMemoryProductPairingRepository();
-  const productInstallationRepo = new InMemoryProductInstallationRepository();
+  const pairingStore = new Map<string, ProductPairingSessionDoc>();
+  const installationStore = new Map<string, ProductInstallationDoc>();
+  const sessionStore = new Map<string, PluginSessionDoc>();
+  const refreshStore = new Map<string, ProductDeviceRefreshTokenDoc>();
+
+  const productPairingRepo = new InMemoryProductPairingRepository(pairingStore);
+  const productInstallationRepo = new InMemoryProductInstallationRepository(installationStore);
   const productAuditRepo = new InMemoryProductAuditRepository();
-  const productDeviceRefreshTokenRepo = new InMemoryProductDeviceRefreshTokenRepository();
+  const productDeviceRefreshTokenRepo = new InMemoryProductDeviceRefreshTokenRepository(refreshStore);
+  const productExchangeCoordinator = new InMemoryProductExchangeCoordinator(pairingStore, installationStore, sessionStore, refreshStore);
   const pluginRateLimitRepo = new InMemoryPluginRateLimitRepository();
-  const pluginSessionRepo = new InMemoryPluginSessionRepository();
+  const pluginSessionRepo = new InMemoryPluginSessionRepository(sessionStore);
   const app = createTestApp({
     clock: fixedClock(opts.now ?? NOW),
     productPairingRepo,
     productInstallationRepo,
     productAuditRepo,
     productDeviceRefreshTokenRepo,
+    productExchangeCoordinator,
     pluginRateLimitRepo,
     pluginSessionRepo,
     ...(opts.rateLimitPerMinute !== undefined ? { productPairingRateLimitPerMinute: opts.rateLimitPerMinute } : {}),
   });
-  return { app, productPairingRepo, productInstallationRepo, productAuditRepo, productDeviceRefreshTokenRepo, pluginSessionRepo };
+  return { app, productPairingRepo, productInstallationRepo, productAuditRepo, productDeviceRefreshTokenRepo, productExchangeCoordinator, pluginSessionRepo };
 }
 
 describe('POST /product/pairings', () => {
@@ -177,10 +193,17 @@ describe('POST /product/pairings/:pairingId/cancel', () => {
   });
 
   it('does not cancel an already-exchanged pairing', async () => {
-    const { app, productPairingRepo } = setup();
+    const { app, productPairingRepo, productExchangeCoordinator } = setup();
     const created = await request(app).post('/product/pairings').send({ installationId: INSTALL_ID });
     await productPairingRepo.markApproved(created.body.pairingId, 'user-1', NOW);
-    await productPairingRepo.markExchangedIfApproved(created.body.pairingId, hashValue(INSTALL_ID), NOW);
+    await productExchangeCoordinator.exchange({
+      pairingId: created.body.pairingId,
+      installationId: INSTALL_ID,
+      installationIdHash: hashValue(INSTALL_ID),
+      accessTokenHash: hashValue(randomCredentialCandidate()),
+      refreshTokenHash: hashValue(randomCredentialCandidate()),
+      now: NOW,
+    });
     const res = await request(app).post(`/product/pairings/${created.body.pairingId}/cancel`).send({ installationId: INSTALL_ID });
     expect(res.status).toBe(200);
     expect((await productPairingRepo.getById(created.body.pairingId))?.status).toBe('exchanged');
@@ -200,13 +223,19 @@ describe('POST /product/pairings/:pairingId/exchange', () => {
     return created.body.pairingId as string;
   }
 
-  it('exchanges an approved pairing for a device session (access + refresh tokens)', async () => {
+  function candidate() {
+    return { accessToken: randomCredentialCandidate(), refreshToken: randomCredentialCandidate() };
+  }
+
+  it('exchanges an approved pairing for a device session, echoing back the client-submitted candidate', async () => {
     const { app, productPairingRepo } = setup();
     const pairingId = await createApprovedPairing(app, productPairingRepo);
-    const res = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID });
+    const { accessToken, refreshToken } = candidate();
+    const res = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
     expect(res.status).toBe(200);
-    expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.refreshToken).toEqual(expect.any(String));
+    // Backendは受け取った候補をそのまま返すだけで、自分では生成しない。
+    expect(res.body.accessToken).toBe(accessToken);
+    expect(res.body.refreshToken).toBe(refreshToken);
     expect(res.body.accessTokenExpiresInSeconds).toBe(15 * 60);
     expect(res.body.scopes).toEqual(['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read', 'calendar:update', 'calendar:delete']);
   });
@@ -214,7 +243,7 @@ describe('POST /product/pairings/:pairingId/exchange', () => {
   it('binds the installation to the approved user', async () => {
     const { app, productPairingRepo, productInstallationRepo } = setup();
     const pairingId = await createApprovedPairing(app, productPairingRepo);
-    await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID });
+    await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, ...candidate() });
     const installation = await productInstallationRepo.get(INSTALL_ID);
     expect(installation?.userId).toBe('user-1');
   });
@@ -222,8 +251,9 @@ describe('POST /product/pairings/:pairingId/exchange', () => {
   it('creates a device-type plugin session usable for authenticated routes', async () => {
     const { app, productPairingRepo, pluginSessionRepo } = setup();
     const pairingId = await createApprovedPairing(app, productPairingRepo);
-    const res = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID });
-    const session = await pluginSessionRepo.get(hashValue(res.body.accessToken));
+    const { accessToken, refreshToken } = candidate();
+    await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
+    const session = await pluginSessionRepo.get(hashValue(accessToken));
     expect(session?.tokenType).toBe('device');
     expect(session?.userId).toBe('user-1');
   });
@@ -231,17 +261,51 @@ describe('POST /product/pairings/:pairingId/exchange', () => {
   it('rejects exchange for a pairing that is not yet approved', async () => {
     const { app } = setup();
     const created = await request(app).post('/product/pairings').send({ installationId: INSTALL_ID });
-    const res = await request(app).post(`/product/pairings/${created.body.pairingId}/exchange`).send({ installationId: INSTALL_ID });
+    const res = await request(app).post(`/product/pairings/${created.body.pairingId}/exchange`).send({ installationId: INSTALL_ID, ...candidate() });
     expect(res.status).toBe(409);
   });
 
-  it('does not allow exchange to be replayed (second call fails)', async () => {
+  it('rejects a malformed accessToken/refreshToken (not 64 lowercase hex characters)', async () => {
     const { app, productPairingRepo } = setup();
     const pairingId = await createApprovedPairing(app, productPairingRepo);
-    const first = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID });
-    const second = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID });
+    const res = await request(app)
+      .post(`/product/pairings/${pairingId}/exchange`)
+      .send({ installationId: INSTALL_ID, accessToken: 'not-hex', refreshToken: randomCredentialCandidate() });
+    expect(res.status).toBe(400);
+  });
+
+  it('replaying the exact same candidate succeeds idempotently (does not fail, does not mint a new credential)', async () => {
+    const { app, productPairingRepo, pluginSessionRepo } = setup();
+    const pairingId = await createApprovedPairing(app, productPairingRepo);
+    const { accessToken, refreshToken } = candidate();
+    const first = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
+    const second = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.accessToken).toBe(accessToken);
+    expect(second.body.refreshToken).toBe(refreshToken);
+    // 同一tokenHashのdocが1件のみ存在する(作り直されていない)
+    const session = await pluginSessionRepo.get(hashValue(accessToken));
+    expect(session).not.toBeNull();
+  });
+
+  it('rejects a different candidate submitted for an already-exchanged pairing (hash_mismatch)', async () => {
+    const { app, productPairingRepo } = setup();
+    const pairingId = await createApprovedPairing(app, productPairingRepo);
+    const first = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, ...candidate() });
+    const second = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, ...candidate() });
     expect(first.status).toBe(200);
     expect(second.status).toBe(409);
+  });
+
+  it('rejects exchange when the installation has been revoked (does not re-issue/reactivate)', async () => {
+    const { app, productPairingRepo, productInstallationRepo, pluginSessionRepo } = setup();
+    const pairingId = await createApprovedPairing(app, productPairingRepo);
+    await productInstallationRepo.revoke(INSTALL_ID, NOW);
+    const { accessToken, refreshToken } = candidate();
+    const res = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
+    expect(res.status).toBe(409);
+    expect(await pluginSessionRepo.get(hashValue(accessToken))).toBeNull();
   });
 
   it('rejects exchange when the installationId does not match the pairing', async () => {
@@ -249,18 +313,29 @@ describe('POST /product/pairings/:pairingId/exchange', () => {
     const pairingId = await createApprovedPairing(app, productPairingRepo);
     const res = await request(app)
       .post(`/product/pairings/${pairingId}/exchange`)
-      .send({ installationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' });
+      .send({ installationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', ...candidate() });
     expect(res.status).toBe(400);
   });
 
-  it('never logs the raw access or refresh token', async () => {
+  it('never logs the client-submitted or returned access/refresh token candidate', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { app, productPairingRepo } = setup();
     const pairingId = await createApprovedPairing(app, productPairingRepo);
-    const res = await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID });
+    const { accessToken, refreshToken } = candidate();
+    await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
     const allLogText = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(allLogText).not.toContain(res.body.accessToken);
-    expect(allLogText).not.toContain(res.body.refreshToken);
+    expect(allLogText).not.toContain(accessToken);
+    expect(allLogText).not.toContain(refreshToken);
     logSpy.mockRestore();
+  });
+
+  it('never includes the raw access/refresh token candidate in an audit record', async () => {
+    const { app, productPairingRepo, productAuditRepo } = setup();
+    const pairingId = await createApprovedPairing(app, productPairingRepo);
+    const { accessToken, refreshToken } = candidate();
+    await request(app).post(`/product/pairings/${pairingId}/exchange`).send({ installationId: INSTALL_ID, accessToken, refreshToken });
+    const serialized = JSON.stringify(productAuditRepo.entries);
+    expect(serialized).not.toContain(accessToken);
+    expect(serialized).not.toContain(refreshToken);
   });
 });

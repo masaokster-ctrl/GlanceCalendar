@@ -1,4 +1,4 @@
-import type { Firestore, Transaction } from '@google-cloud/firestore';
+import type { Firestore } from '@google-cloud/firestore';
 import { normalizeDate, normalizeNullableDate } from '../firestore/firestoreDates.js';
 import type { ProductPairingSessionDoc } from '../firestore/models.js';
 
@@ -10,13 +10,6 @@ export interface CreatePairingParams {
   expiresAt: Date;
 }
 
-export type ExchangeResult =
-  | { kind: 'exchanged'; doc: ProductPairingSessionDoc }
-  | { kind: 'not_approved' }
-  | { kind: 'already_exchanged' }
-  | { kind: 'not_found' }
-  | { kind: 'installation_mismatch' };
-
 export interface ProductPairingRepository {
   create(params: CreatePairingParams): Promise<void>;
   getById(pairingId: string): Promise<ProductPairingSessionDoc | null>;
@@ -25,8 +18,9 @@ export interface ProductPairingRepository {
   cancelActiveForInstallation(installationIdHash: string, now: Date): Promise<void>;
   markOAuthInProgress(pairingId: string): Promise<void>;
   markApproved(pairingId: string, userId: string, now: Date): Promise<void>;
-  /** transactionでapproved→exchangedへ一度だけ遷移させる。installationIdHashの一致も検証する。 */
-  markExchangedIfApproved(pairingId: string, installationIdHash: string, now: Date): Promise<ExchangeResult>;
+  // exchange(approved→exchanged遷移・credential発行)はProductExchangeCoordinatorが専任で行う
+  // (pairing doc単独のtransactionではpluginSessions/productDeviceRefreshTokens/productInstallations
+  // とのatomic性を保証できないため、このRepositoryにはメソッドを置かない)。
   markFailed(pairingId: string, sanitizedErrorCode: string, now: Date): Promise<void>;
   markCancelled(pairingId: string, now: Date): Promise<void>;
   recordPollAttempt(pairingId: string, now: Date): Promise<void>;
@@ -64,6 +58,8 @@ export class FirestoreProductPairingRepository implements ProductPairingReposito
       attemptCount: 0,
       lastPollAt: null,
       sanitizedErrorCode: null,
+      exchangeAccessTokenHash: null,
+      exchangeRefreshTokenHash: null,
     };
     await this.firestore.collection(COLLECTION).doc(params.pairingId).set(doc);
   }
@@ -117,21 +113,6 @@ export class FirestoreProductPairingRepository implements ProductPairingReposito
     await this.firestore.collection(COLLECTION).doc(pairingId).set({ status: 'approved', userId, approvedAt: now }, { merge: true });
   }
 
-  async markExchangedIfApproved(pairingId: string, installationIdHash: string, now: Date): Promise<ExchangeResult> {
-    const ref = this.firestore.collection(COLLECTION).doc(pairingId);
-    return this.firestore.runTransaction(async (tx: Transaction) => {
-      const snapshot = await tx.get(ref);
-      if (!snapshot.exists) return { kind: 'not_found' } as const;
-      const doc = normalizeDoc(snapshot.data() as ProductPairingSessionDoc);
-      if (doc.installationIdHash !== installationIdHash) return { kind: 'installation_mismatch' } as const;
-      if (doc.status === 'exchanged') return { kind: 'already_exchanged' } as const;
-      if (doc.status !== 'approved') return { kind: 'not_approved' } as const;
-      const updated: ProductPairingSessionDoc = { ...doc, status: 'exchanged', exchangedAt: now };
-      tx.set(ref, { status: 'exchanged', exchangedAt: now }, { merge: true });
-      return { kind: 'exchanged', doc: updated } as const;
-    });
-  }
-
   async markFailed(pairingId: string, sanitizedErrorCode: string, now: Date): Promise<void> {
     await this.firestore.collection(COLLECTION).doc(pairingId).set({ status: 'failed', sanitizedErrorCode }, { merge: true });
     void now;
@@ -150,9 +131,11 @@ export class FirestoreProductPairingRepository implements ProductPairingReposito
   }
 }
 
-/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。 */
+/** テスト・ローカル疎通確認用のインメモリ実装。実Firestoreへは一切アクセスしない。
+ *  storeを外部から注入できるようにしているのは、ProductExchangeCoordinator(InMemory版)と
+ *  同じMapを共有し、exchange関連の統合テストで一貫した状態を検証できるようにするため。 */
 export class InMemoryProductPairingRepository implements ProductPairingRepository {
-  private readonly store = new Map<string, ProductPairingSessionDoc>();
+  constructor(private readonly store: Map<string, ProductPairingSessionDoc> = new Map()) {}
 
   async create(params: CreatePairingParams): Promise<void> {
     this.store.set(params.pairingId, {
@@ -168,6 +151,8 @@ export class InMemoryProductPairingRepository implements ProductPairingRepositor
       attemptCount: 0,
       lastPollAt: null,
       sanitizedErrorCode: null,
+      exchangeAccessTokenHash: null,
+      exchangeRefreshTokenHash: null,
     });
   }
 
@@ -215,17 +200,6 @@ export class InMemoryProductPairingRepository implements ProductPairingRepositor
     const doc = this.store.get(pairingId);
     if (!doc) return;
     this.store.set(pairingId, { ...doc, status: 'approved', userId, approvedAt: now });
-  }
-
-  async markExchangedIfApproved(pairingId: string, installationIdHash: string, now: Date): Promise<ExchangeResult> {
-    const doc = this.store.get(pairingId);
-    if (!doc) return { kind: 'not_found' };
-    if (doc.installationIdHash !== installationIdHash) return { kind: 'installation_mismatch' };
-    if (doc.status === 'exchanged') return { kind: 'already_exchanged' };
-    if (doc.status !== 'approved') return { kind: 'not_approved' };
-    const updated: ProductPairingSessionDoc = { ...doc, status: 'exchanged', exchangedAt: now };
-    this.store.set(pairingId, updated);
-    return { kind: 'exchanged', doc: updated };
   }
 
   async markFailed(pairingId: string, sanitizedErrorCode: string, _now: Date): Promise<void> {

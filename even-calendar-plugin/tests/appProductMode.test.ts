@@ -3,7 +3,7 @@ import { OsEventTypeList } from '@evenrealities/even_hub_sdk'
 import { createApp, type AppDeps } from '../src/app'
 import { FakeEvenAppBridge } from './fakes/fakeEvenAppBridge'
 import { BridgeProductTokenStore } from '../src/product/tokenStore'
-import type { StartPairingOutcome, CheckPairingStatusOutcome, ExchangePairingOutcome } from '../src/product/pairingClient'
+import type { StartPairingOutcome, CheckPairingStatusOutcome, ExchangePairingOutcome, ExchangePairingParams } from '../src/product/pairingClient'
 import type { RefreshSessionOutcome } from '../src/product/productAuthProvider'
 import type { FetchDayEventsOutcome, FetchDayEventsParams } from '../src/dayEventsClient'
 import type { AnalyzeAudioOutcome, AnalyzeAudioParams } from '../src/analyzeAudioClient'
@@ -137,7 +137,7 @@ describe('createApp — Phase 2H pairing flow', () => {
     expect(analyzeCalls).toHaveLength(0)
   })
 
-  it('single press on notConnected starts a pairing and shows the verification URL + code', async () => {
+  it('single press on notConnected starts a pairing and shows the code (no URL displayed)', async () => {
     stubHealthyFetch()
     const bridge = new FakeEvenAppBridge()
     const tokenStore = new BridgeProductTokenStore(bridge)
@@ -154,8 +154,9 @@ describe('createApp — Phase 2H pairing flow', () => {
     bridge.emit(press())
     await flushMicrotasks()
     expect(app.getScreen()).toBe('pairing')
-    expect(bridge.lastTextContent()).toContain('backend.test/connect')
     expect(bridge.lastTextContent()).toContain('ABCD-EFGH')
+    expect(bridge.lastTextContent()).toContain('Even Realities')
+    expect(bridge.lastTextContent()).not.toContain('backend.test/connect')
     expect(app.getPairingContext().state).toBe('waitingApproval')
   })
 
@@ -227,15 +228,29 @@ describe('createApp — Phase 2H pairing flow', () => {
       pollCount += 1
       return { kind: 'success', status: pollCount < 2 ? 'pending' : 'approved' }
     }
-    const exchangePairingFn = async (): Promise<ExchangePairingOutcome> => ({
+    // client-generated credential方式: Backendは受け取ったaccessToken/refreshTokenをそのまま
+    // 返すだけ(自分では生成しない)。テストでは固定の候補を注入し、その値がTokenStoreへ
+    // 保存されることを確認する。
+    const FIXED_ACCESS_TOKEN = 'a'.repeat(64)
+    const FIXED_REFRESH_TOKEN = 'b'.repeat(64)
+    const exchangePairingFn = async (params: ExchangePairingParams): Promise<ExchangePairingOutcome> => ({
       kind: 'success',
-      accessToken: 'new-access-token',
+      accessToken: params.accessToken,
       accessTokenExpiresInSeconds: 900,
-      refreshToken: 'new-refresh-token',
+      refreshToken: params.refreshToken,
       refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       scopes: ['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read'],
     })
-    const app = createApp(bridge, productDeps({ tokenStore, startPairingFn, checkPairingStatusFn, exchangePairingFn }))
+    const app = createApp(
+      bridge,
+      productDeps({
+        tokenStore,
+        startPairingFn,
+        checkPairingStatusFn,
+        exchangePairingFn,
+        generateCredentialCandidatePairFn: () => ({ accessToken: FIXED_ACCESS_TOKEN, refreshToken: FIXED_REFRESH_TOKEN }),
+      }),
+    )
     await app.start()
     bridge.emit(press())
     await flushMicrotasks()
@@ -252,7 +267,7 @@ describe('createApp — Phase 2H pairing flow', () => {
     expect(app.getScreen()).toBe('pairingSuccess')
 
     const saved = await tokenStore.load()
-    expect(saved?.refreshToken).toBe('new-refresh-token')
+    expect(saved?.refreshToken).toBe(FIXED_REFRESH_TOKEN)
     // access tokenはTokenStoreへは一切保存されない(ProductAuthManagerのメモリ上にのみ保持)。
     expect(saved).not.toHaveProperty('accessToken')
     vi.useRealTimers()
@@ -426,8 +441,8 @@ describe('createApp — Phase 2K: reconnect from the home menu (5th item)', () =
 
     expect(callState.count).toBe(1)
     expect(app.getScreen()).toBe('pairing')
-    expect(bridge.lastTextContent()).toContain('backend.test/connect')
     expect(bridge.lastTextContent()).toContain('ABCD-EFGH')
+    expect(bridge.lastTextContent()).not.toContain('backend.test/connect')
     expect(app.getPairingContext().state).toBe('waitingApproval')
   })
 
@@ -707,16 +722,27 @@ describe('createApp — Phase 2H privacy: no sensitive console logs', () => {
       expiresInSeconds: 600,
       pollIntervalSeconds: 3,
     })
-    const exchangePairingFn = async (): Promise<ExchangePairingOutcome> => ({
+    // client-generated credential方式: 生値はPlugin側が生成する。マーカー値を注入し、それがログへ
+    // 漏れないことを確認する(Backendが返すaccessToken/refreshTokenの値はapp.ts側では使われない)。
+    const exchangePairingFn = async (params: ExchangePairingParams): Promise<ExchangePairingOutcome> => ({
       kind: 'success',
-      accessToken: 'SECRET-ACCESS-TOKEN',
+      accessToken: params.accessToken,
       accessTokenExpiresInSeconds: 900,
-      refreshToken: 'SECRET-REFRESH-TOKEN',
+      refreshToken: params.refreshToken,
       refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       scopes: [],
     })
     const checkPairingStatusFn = async (): Promise<CheckPairingStatusOutcome> => ({ kind: 'success', status: 'approved' })
-    const app = createApp(bridge, productDeps({ tokenStore, startPairingFn, checkPairingStatusFn, exchangePairingFn, pairingPollMaxDurationMs: 60_000 }))
+    const app = createApp(
+      bridge,
+      productDeps({
+        tokenStore,
+        startPairingFn,
+        checkPairingStatusFn,
+        exchangePairingFn,
+        generateCredentialCandidatePairFn: () => ({ accessToken: 'SECRET-ACCESS-TOKEN', refreshToken: 'SECRET-REFRESH-TOKEN' }),
+      }),
+    )
     await app.start()
     bridge.emit(press())
     await flushMicrotasks()

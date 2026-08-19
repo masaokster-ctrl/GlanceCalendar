@@ -1,34 +1,31 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Router, type Request, type RequestHandler, type Response } from 'express';
 import type { Clock } from '../time/clock.js';
 import { logSafeEvent } from '../security/safeLogger.js';
-import { hashValue, shortHashPrefix } from '../security/devSessionToken.js';
-import { generateDevSessionToken } from '../security/devSessionToken.js';
+import { hashValue, shortHashPrefix, hashDevSessionToken } from '../security/devSessionToken.js';
 import { generateUserCode, normalizeUserCodeInput } from '../product/userCode.js';
-import type { PluginSessionRepository } from '../firestore/pluginSessionRepository.js';
 import type { PluginRateLimitRepository } from '../firestore/pluginRateLimitRepository.js';
 import type { ProductPairingRepository } from '../product/productPairingRepository.js';
 import type { ProductInstallationRepository } from '../product/productInstallationRepository.js';
 import type { ProductAuditRepository } from '../product/productAuditRepository.js';
-import type { ProductDeviceRefreshTokenRepository } from '../product/productDeviceRefreshTokenRepository.js';
+import type { ProductExchangeCoordinator } from '../product/productExchangeCoordinator.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// client-generated credential方式: Plugin側がcrypto.getRandomValues(32bytes)で生成しhex64文字化したもの
+// (既存のgenerateDevSessionToken()と同じ32byte/hex64桁の形式)。それ以外は一切受け付けない。
+const CREDENTIAL_CANDIDATE_PATTERN = /^[0-9a-f]{64}$/;
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_SECONDS = 3;
-const DEVICE_ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
-const DEVICE_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const DEVICE_SCOPES = ['audio:analyze', 'calendar:create', 'calendar:status', 'calendar:read', 'calendar:update', 'calendar:delete'];
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 10;
 const MAX_APP_VERSION_LENGTH = 40;
 
 export interface ProductPairingsRouterDeps {
   clock: Clock;
-  pluginSessionRepo: PluginSessionRepository;
   rateLimitRepo: PluginRateLimitRepository;
   pairingRepo: ProductPairingRepository;
   installationRepo: ProductInstallationRepository;
   auditRepo: ProductAuditRepository;
-  deviceRefreshTokenRepo: ProductDeviceRefreshTokenRepository;
+  exchangeCoordinator: ProductExchangeCoordinator;
   publicBaseUrl?: string;
   rateLimitPerMinute?: number;
 }
@@ -207,18 +204,37 @@ export function createProductPairingsRouter(deps: ProductPairingsRouterDeps): Ro
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
     const pairingId = req.params.pairingId ?? '';
-    const body = req.body as { installationId?: unknown } | undefined;
+    const body = req.body as { installationId?: unknown; accessToken?: unknown; refreshToken?: unknown } | undefined;
     const installationId = typeof body?.installationId === 'string' ? body.installationId : '';
+    const accessToken = typeof body?.accessToken === 'string' ? body.accessToken : '';
+    const refreshToken = typeof body?.refreshToken === 'string' ? body.refreshToken : '';
     if (!UUID_PATTERN.test(pairingId) || !UUID_PATTERN.test(installationId)) {
       errorJson(res, 400, 'Invalid request');
+      return;
+    }
+    // client-generated credential方式: 生値はここでのみ受け取り、hash化した後は保持しない。
+    // 形式(64桁hex)から外れるものは即座に拒否する(Backendは受け取った値をそのままハッシュするだけで、
+    // 自分では生成しない)。
+    if (!CREDENTIAL_CANDIDATE_PATTERN.test(accessToken) || !CREDENTIAL_CANDIDATE_PATTERN.test(refreshToken)) {
+      errorJson(res, 400, 'accessToken/refreshToken must each be 64 lowercase hex characters');
       return;
     }
 
     const now = deps.clock.now();
     const installationIdHash = hashValue(installationId);
-    const result = await deps.pairingRepo.markExchangedIfApproved(pairingId, installationIdHash, now);
+    const accessTokenHash = hashDevSessionToken(accessToken);
+    const refreshTokenHash = hashDevSessionToken(refreshToken);
 
-    if (result.kind !== 'exchanged') {
+    const result = await deps.exchangeCoordinator.exchange({
+      pairingId,
+      installationId,
+      installationIdHash,
+      accessTokenHash,
+      refreshTokenHash,
+      now,
+    });
+
+    if (result.kind !== 'registered') {
       const status = result.kind === 'not_found' || result.kind === 'installation_mismatch' ? 400 : 409;
       await deps.auditRepo.record({
         userIdHash: null,
@@ -233,44 +249,8 @@ export function createProductPairingsRouter(deps: ProductPairingsRouterDeps): Ro
       return;
     }
 
-    const userId = result.doc.userId;
-    if (!userId) {
-      errorJson(res, 409, 'Pairing is not ready to be exchanged');
-      return;
-    }
-
-    const installation = await deps.installationRepo.getOrCreate({ installationId, now, appVersion: null, sdkVersion: null });
-    await deps.installationRepo.bindUser(installationId, userId, now);
-
-    const accessToken = generateDevSessionToken();
-    const accessTokenHash = createHash('sha256').update(accessToken, 'utf8').digest('hex');
-    await deps.pluginSessionRepo.create({
-      tokenHash: accessTokenHash,
-      installId: installationId,
-      scope: DEVICE_SCOPES,
-      now,
-      expiresAt: new Date(now.getTime() + DEVICE_ACCESS_TOKEN_TTL_MS),
-      tokenType: 'device',
-      userId,
-      tokenVersion: installation.tokenVersion,
-    });
-
-    const refreshToken = generateDevSessionToken();
-    const refreshTokenHash = createHash('sha256').update(refreshToken, 'utf8').digest('hex');
-    const familyId = randomUUID();
-    const refreshTokenExpiresAt = new Date(now.getTime() + DEVICE_REFRESH_TOKEN_TTL_MS);
-    await deps.deviceRefreshTokenRepo.create({
-      refreshTokenHash,
-      installationId,
-      userId,
-      familyId,
-      generation: 1,
-      now,
-      expiresAt: refreshTokenExpiresAt,
-    });
-
     await deps.auditRepo.record({
-      userIdHash: shortHashPrefix(hashValue(userId)),
+      userIdHash: shortHashPrefix(hashValue(result.userId)),
       installationIdHash: shortHashPrefix(installationIdHash),
       requestIdHash: requestIdHash(req),
       action: 'device_session_issued',
@@ -280,12 +260,13 @@ export function createProductPairingsRouter(deps: ProductPairingsRouterDeps): Ro
     });
     logSafeEvent({ event: 'product_device_session_issued', installIdHashPrefix: shortHashPrefix(installationIdHash) });
 
+    // accessToken/refreshTokenはリクエストで受け取った生値をそのまま返すだけ(Backend発行ではない)。
     res.status(200).json({
       accessToken,
-      accessTokenExpiresInSeconds: DEVICE_ACCESS_TOKEN_TTL_MS / 1000,
+      accessTokenExpiresInSeconds: result.accessTokenExpiresInSeconds,
       refreshToken,
-      refreshTokenExpiresAt: refreshTokenExpiresAt.toISOString(),
-      scopes: DEVICE_SCOPES,
+      refreshTokenExpiresAt: result.refreshTokenExpiresAt.toISOString(),
+      scopes: result.scopes,
     });
   });
 

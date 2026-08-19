@@ -161,7 +161,7 @@ The app supports Japanese (`ja`) and English (`en`):
 
 ## Current release
 
-- Version: `0.3.2`
+- Version: `0.4.0`
 - Package ID: `com.masaokster.calendarwithgemini`
 - Languages: Japanese, English
 

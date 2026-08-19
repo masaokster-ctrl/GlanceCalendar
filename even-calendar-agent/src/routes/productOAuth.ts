@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import type { Clock } from '../time/clock.js';
 import { readCookie } from '../security/cookies.js';
@@ -22,6 +23,7 @@ import type { GoogleCredentialRepository } from '../product/productGoogleCredent
 import { EncryptionNotConfiguredError } from '../product/googleCredentialCipher.js';
 import { PRODUCT_OAUTH_SCOPES } from '../product/productOAuthConfig.js';
 import { classifyProductOAuthTokenError } from '../product/productOAuthErrorClassifier.js';
+import { PRODUCT_HISTORY_RETURN_MARKER_STORAGE_KEY } from '../product/productHistoryReturnMarker.js';
 
 export interface ProductOAuthRouterDeps {
   clock: Clock;
@@ -40,13 +42,96 @@ function errorPage(res: Response, status: number, message: string): void {
   );
 }
 
-function successPage(res: Response): void {
-  res
-    .status(200)
-    .type('html')
-    .send(
-      '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Calendar with Gemini</title></head><body><h1>接続しました</h1><p>Even G2をご確認ください。このページは閉じて構いません。</p></body></html>',
-    );
+/**
+ * リクエストのAccept-Languageヘッダーから、この成功ページを日本語/英語のどちらで出すかだけを決める。
+ * G2側の表示言語(bridge storageにのみ保存されておりBackendからは参照不可)とは独立した、
+ * このページ単体の簡易判定であり、他の既存ページ(/connect等)の日本語固定は変更しない。
+ */
+function prefersEnglish(req: Request): boolean {
+  const raw = req.header('accept-language') ?? '';
+  return /^\s*en/i.test(raw);
+}
+
+// 実際に観測されたOAuthフロー(未確認アプリ警告・再ログイン・アカウント選択・/connect/verify再訪・
+// /connect)では最大でも数段の戻りで到達する。markerが壊れている/改ざんされている等でstepsが
+// 異常に大きくなるケースに備え、明らかに現実的な範囲を超える値は安全側に倒して拒否する。
+const MAX_REASONABLE_RETURN_STEPS = 50;
+
+/**
+ * 「Even Calendarへ戻る」ボタンの配線。/connectで記録したhistory起点(startHistoryLength)と
+ * 現在のwindow.history.lengthから、Even Calendar Pluginまで一度に戻るのに必要なstep数を算出する。
+ * Nは常に実行時に動的計算し、固定値では絶対に使わない。history.go(-N)は、ユーザーが実際にボタンを
+ * タップした場合にのみ実行し、ページ読み込み時に自動実行することはない。
+ * 以下をすべて満たした場合のみボタンを表示・有効化する。1つでも満たさない場合はhistory.go()を
+ * 一切呼ばず、既存の手動案内(「←」を押して戻る)のみをフォールバックとして残す。
+ *   - sessionStorage markerが存在する
+ *   - startHistoryLengthが正常な正整数
+ *   - currentHistoryLength(window.history.length)が正常な正整数
+ *   - currentHistoryLength >= startHistoryLength
+ *   - steps = currentHistoryLength - startHistoryLength + 1 が 0 より大きい
+ *   - stepsが異常に大きくない(MAX_REASONABLE_RETURN_STEPSを超えない)
+ */
+function returnToPluginScript(nonce: string): string {
+  return `<script nonce="${nonce}">
+(function () {
+  var MAX_REASONABLE_RETURN_STEPS = ${MAX_REASONABLE_RETURN_STEPS};
+  function isPositiveInteger(value) {
+    return typeof value === 'number' && Number.isInteger(value) && value > 0;
+  }
+  var btn = document.getElementById('return-to-plugin');
+  if (!btn) return;
+  var startHistoryLength = null;
+  try {
+    var raw = sessionStorage.getItem('${PRODUCT_HISTORY_RETURN_MARKER_STORAGE_KEY}');
+    var parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && isPositiveInteger(parsed.startHistoryLength)) {
+      startHistoryLength = parsed.startHistoryLength;
+    }
+  } catch (e) { startHistoryLength = null; }
+  if (startHistoryLength === null) return;
+  var currentHistoryLength = window.history.length;
+  if (!isPositiveInteger(currentHistoryLength)) return;
+  if (currentHistoryLength < startHistoryLength) return;
+  var steps = currentHistoryLength - startHistoryLength + 1;
+  if (!(steps > 0) || steps > MAX_REASONABLE_RETURN_STEPS) return;
+  btn.style.display = '';
+  btn.addEventListener('click', function () {
+    history.go(-steps);
+  });
+})();
+</script>`;
+}
+
+function successPage(req: Request, res: Response): void {
+  // このページはhelmetの既定CSP(script-src 'self')を継承しているため、「Even Calendarへ戻る」ボタンの
+  // 配線に必要な最小限のインラインscriptだけをnonceベースで許可する(汎用的な'unsafe-inline'は使わない)。
+  const nonce = randomBytes(16).toString('base64');
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
+  );
+  const script = returnToPluginScript(nonce);
+  // ボタンは既定でdisplay:noneにしておき、有効なstep数が算出できた場合のみscriptが表示する
+  // (history起点が無い/不正な場合は、下の手動案内(「←」を押して戻る)だけが残る)。
+  const buttonStyle = 'display:none;margin-top:16px;font-size:16px;padding:12px;width:100%;box-sizing:border-box;';
+  const html = prefersEnglish(req)
+    ? `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar with Gemini</title></head><body>
+<h1>Connected</h1>
+<p>Your Google Calendar has been connected.</p>
+<button id="return-to-plugin" type="button" style="${buttonStyle}">Return to Even Calendar</button>
+<p>If the button above doesn't work,<br>tap the "&larr;" in the top-left to return to Even Calendar.</p>
+<p>Once you're back in Even Calendar,<br>Glass will also show the connection is complete.</p>
+${script}
+</body></html>`
+    : `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar with Gemini</title></head><body>
+<h1>接続しました</h1>
+<p>Google Calendarとの接続が完了しました。</p>
+<button id="return-to-plugin" type="button" style="${buttonStyle}">Even Calendarへ戻る</button>
+<p>ボタンでEven Calendarに戻れない場合は、<br>左上の「&larr;」を押してEven Calendarに戻ってください。</p>
+<p>Even Calendarに戻ると、<br>Glassにも接続完了が表示されます。</p>
+${script}
+</body></html>`;
+  res.status(200).type('html').send(html);
 }
 
 export function createProductOAuthRouter(deps: ProductOAuthRouterDeps): Router {
@@ -215,7 +300,7 @@ export function createProductOAuthRouter(deps: ProductOAuthRouterDeps): Router {
     await deps.pairingRepo.markApproved(pairingId, user.userId, now);
     logSafeEvent({ event: 'product_oauth_completed', installIdHashPrefix: shortHashPrefix(pairing.installationIdHash) });
 
-    successPage(res);
+    successPage(req, res);
   });
 
   return router;

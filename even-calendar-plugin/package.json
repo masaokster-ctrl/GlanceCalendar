@@ -1,7 +1,7 @@
 {
   "name": "even-calendar-plugin",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "build:product": "tsc --noEmit && vite build --mode product",
     "preview": "vite preview",
     "pack": "evenhub pack",
-    "package:product": "npm run build:product && evenhub pack app.json dist -o calendar-with-gemini-0.2.1.ehpk",
+    "package:product": "npm run build:product && evenhub pack app.json dist -o calendar-with-gemini-0.4.0.ehpk",
     "simulate": "evenhub-simulator http://localhost:5173",
     "lint": "eslint .",
     "test": "vitest run"

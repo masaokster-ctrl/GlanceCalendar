@@ -24,6 +24,7 @@ import { FirestoreProductInstallationRepository } from './product/productInstall
 import { FirestoreProductUserRepository } from './product/productUserRepository.js';
 import { FirestoreProductDeviceRefreshTokenRepository } from './product/productDeviceRefreshTokenRepository.js';
 import { FirestoreProductAuditRepository } from './product/productAuditRepository.js';
+import { FirestoreProductExchangeCoordinator } from './product/productExchangeCoordinator.js';
 import { FirestoreGoogleCredentialRepository } from './product/productGoogleCredentialRepository.js';
 import { CloudKmsGoogleCredentialCipher, NotConfiguredGoogleCredentialCipher, type GoogleCredentialCipher } from './product/googleCredentialCipher.js';
 import { ProductSigningKeyProvider } from './product/productSigningKey.js';
@@ -111,6 +112,7 @@ const productInstallationRepo = new FirestoreProductInstallationRepository(fires
 const productUserRepo = new FirestoreProductUserRepository(firestore);
 const productDeviceRefreshTokenRepo = new FirestoreProductDeviceRefreshTokenRepository(firestore);
 const productAuditRepo = new FirestoreProductAuditRepository(firestore);
+const productExchangeCoordinator = new FirestoreProductExchangeCoordinator(firestore);
 
 const resolveCalendarService = createCalendarServiceResolver({
   productOAuthConfig,
@@ -150,6 +152,7 @@ const app = createApp({
   productUserRepo,
   productDeviceRefreshTokenRepo,
   productAuditRepo,
+  productExchangeCoordinator,
   productCredentialRepo,
   productCredentialCipher,
   productSigningKeyProvider,

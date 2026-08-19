@@ -87,6 +87,8 @@ import {
 } from './product/pairingClient'
 import { ProductAuthManager, type RefreshSessionOutcome, type RefreshSessionParams } from './product/productAuthProvider'
 import type { ProductTokenStore } from './product/tokenStore'
+import { BridgePairingResumeStore, type PairingResumeStore, type PersistedPairingResume } from './product/pairingResumeStore'
+import { generateCredentialCandidatePair, type CredentialCandidatePair } from './product/credentialCandidate'
 
 const CONTAINER_ID = 1
 const CONTAINER_NAME = 'main'
@@ -281,13 +283,19 @@ export interface AppDeps {
    * 製品モードとして扱われ、これらが使われる。devモードでは一切参照されない(既存動作を変えない)。
    */
   tokenStore?: ProductTokenStore
+  /** pairing進行中の再開情報の永続化先。未指定時はproduct modeでのみ`BridgePairingResumeStore(bridge)`を使う。 */
+  pairingResumeStore?: PairingResumeStore
+  /** exchange用のaccess/refresh token候補生成。テストでの決定的注入用(既定はCSPRNGベースのfail-close実装)。 */
+  generateCredentialCandidatePairFn?: () => CredentialCandidatePair
   productInstallationId?: string
   startPairingFn?: (params: StartPairingParams) => Promise<StartPairingOutcome>
   checkPairingStatusFn?: (params: CheckPairingStatusParams) => Promise<CheckPairingStatusOutcome>
   cancelPairingFn?: (params: CancelPairingParams) => Promise<void>
   exchangePairingFn?: (params: ExchangePairingParams) => Promise<ExchangePairingOutcome>
   refreshSessionFn?: (params: RefreshSessionParams) => Promise<RefreshSessionOutcome>
-  pairingPollMaxDurationMs?: number
+  /** pairing画面の表示/非表示が切り替わるたびに呼ばれる(main.tsがui.tsの「スマホでコードを
+   *  入力する」リンクの表示切り替えへ配線する想定)。 */
+  onPairingScreenActive?: (active: boolean) => void
 }
 
 /** start()で一度だけ収集する、locale解決とLanguage診断画面表示の両方に使う診断情報。 */
@@ -385,12 +393,13 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   // sessionTokenは常に空文字列のため、これが自然に製品モードへフォールバックする。
   const isProductMode = sessionToken.length === 0
   const tokenStore = deps.tokenStore
+  const pairingResumeStore = deps.pairingResumeStore ?? (isProductMode ? new BridgePairingResumeStore(bridge) : undefined)
+  const generateCredentialCandidatePairFn = deps.generateCredentialCandidatePairFn ?? generateCredentialCandidatePair
   const productInstallationId = deps.productInstallationId ?? ''
   const startPairingFn = deps.startPairingFn ?? startPairing
   const checkPairingStatusFn = deps.checkPairingStatusFn ?? checkPairingStatus
   const cancelPairingFn = deps.cancelPairingFn ?? cancelPairing
   const exchangePairingFn = deps.exchangePairingFn ?? exchangePairing
-  const pairingPollMaxDurationMs = deps.pairingPollMaxDurationMs ?? 10 * 60 * 1000
   const DEFAULT_PAIRING_POLL_INTERVAL_SECONDS = 3
 
   let currentScreen: ScreenId = 'home'
@@ -454,7 +463,10 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   let pairingContext: PairingContext = initialPairingContext
   let pairingAbortController: AbortController | null = null
   let pairingPollTimer: ReturnType<typeof setTimeout> | null = null
-  let pairingStartedAt: number | null = null
+  /** exchange用のaccess/refresh token候補(client-generated credential方式)。approved検知時に一度だけ
+   *  生成・永続化し、以後のretry/resumeでは常にこの同じ値を再送する(Backend側で新しいtokenを発行し
+   *  直すことによる並行exchange時のcredential置換競合を避けるため)。 */
+  let exchangeCandidate: CredentialCandidatePair | null = null
 
   function clearPairingPollTimer(): void {
     if (pairingPollTimer !== null) {
@@ -638,6 +650,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
 
   function showScreen(screen: ScreenId, text: string): Promise<void> {
     currentScreen = screen
+    deps.onPairingScreenActive?.(screen === 'pairing')
     return render(text)
   }
 
@@ -2198,6 +2211,8 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     clearPairingPollTimer()
     pairingAbortController?.abort()
     pairingAbortController = null
+    exchangeCandidate = null
+    await pairingResumeStore?.clear().catch(() => {})
     pairingContext = pairingReducer(pairingContext, { type: 'RESET' })
     await showScreen('notConnected', screens.notConnectedScreenText())
   }
@@ -2209,10 +2224,35 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     }, pollIntervalSeconds * 1000)
   }
 
+  /** approved/exchangedのどちらの状態からも呼ばれる(client-generated credential方式では、
+   *  同じ候補を送り直すexchangeは冪等なため、'exchanged'状態からの再試行もこの関数で統一的に扱える)。 */
   async function exchangeAfterApproval(): Promise<void> {
     if (pairingContext.pairingId === null) return
     const pairingId = pairingContext.pairingId
     pairingContext = pairingReducer(pairingContext, { type: 'APPROVED' })
+
+    if (!exchangeCandidate) {
+      try {
+        exchangeCandidate = generateCredentialCandidatePairFn()
+      } catch {
+        // CSPRNGが使えない環境ではfail-close(弱い乱数へフォールバックしない)。
+        pairingContext = pairingReducer(pairingContext, { type: 'COMMUNICATION_FAILED' })
+        logSafe({ event: 'product_pairing_exchange_failed', errorCode: 'candidate_generation_failed' })
+        await showScreen('pairingError', screens.pairingErrorScreenText('communication_failure'))
+        return
+      }
+      // ネットワーク呼び出しより先に永続化する(HTTPレスポンス消失後もJS再起動をまたいで同じ候補を再送できるように)。
+      await pairingResumeStore
+        ?.save({
+          pairingId,
+          userCode: pairingContext.userCode ?? '',
+          pollIntervalSeconds: pairingContext.pollIntervalSeconds ?? DEFAULT_PAIRING_POLL_INTERVAL_SECONDS,
+          expiresAt: pairingContext.expiresAt ?? Date.now(),
+          exchangeCandidate,
+        })
+        .catch(() => {})
+    }
+    const candidate = exchangeCandidate
 
     const controller = new AbortController()
     pairingAbortController = controller
@@ -2220,6 +2260,8 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       baseUrl,
       pairingId,
       installationId: productInstallationId,
+      accessToken: candidate.accessToken,
+      refreshToken: candidate.refreshToken,
       signal: controller.signal,
     })
     if (pairingContext.state !== 'exchanging' || pairingAbortController !== controller) return
@@ -2232,14 +2274,26 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       return
     }
 
+    // 1) tokenStore.save() 成功
     if (tokenStore) {
-      await tokenStore.save({
-        refreshToken: outcome.refreshToken,
-        refreshTokenExpiresAt: outcome.refreshTokenExpiresAt,
-      })
+      try {
+        await tokenStore.save({
+          refreshToken: candidate.refreshToken,
+          refreshTokenExpiresAt: outcome.refreshTokenExpiresAt,
+        })
+      } catch {
+        // 保存失敗時はpairingResumeStoreを削除しない(次回起動時に同一候補で冪等replayとして再試行できる)。
+        pairingContext = pairingReducer(pairingContext, { type: 'COMMUNICATION_FAILED' })
+        await showScreen('pairingError', screens.pairingErrorScreenText('communication_failure'))
+        return
+      }
     }
-    // access tokenはTokenStore(永続化)には保存せず、ProductAuthManagerのメモリ上にのみ反映する。
-    authManager?.primeAccessToken(outcome.accessToken, outcome.accessTokenExpiresInSeconds)
+    // 2) authManagerへaccess token反映(access tokenはTokenStoreには保存せず、メモリ上にのみ反映する)
+    authManager?.primeAccessToken(candidate.accessToken, outcome.accessTokenExpiresInSeconds)
+    // 3) pairingResumeStore.clear()(best-effort。失敗しても次回起動時に同一候補で安全に再試行できる)
+    exchangeCandidate = null
+    await pairingResumeStore?.clear().catch(() => {})
+    // 4) pairingSuccess表示
     pairingContext = pairingReducer(pairingContext, { type: 'EXCHANGE_SUCCEEDED' })
     logSafe({ event: 'product_pairing_exchange_succeeded' })
     await showScreen('pairingSuccess', screens.pairingSuccessScreenText())
@@ -2248,8 +2302,9 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   async function pollPairingOnce(pollIntervalSeconds: number): Promise<void> {
     if (pairingContext.state !== 'waitingApproval' || pairingContext.pairingId === null) return
 
-    if (pairingStartedAt !== null && Date.now() - pairingStartedAt >= pairingPollMaxDurationMs) {
+    if (pairingContext.expiresAt !== null && Date.now() >= pairingContext.expiresAt) {
       pairingContext = pairingReducer(pairingContext, { type: 'EXPIRED' })
+      await pairingResumeStore?.clear().catch(() => {})
       logSafe({ event: 'product_pairing_poll_expired' })
       await showScreen('pairingError', screens.pairingErrorScreenText('expired'))
       return
@@ -2278,20 +2333,25 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
         schedulePairingPoll(pollIntervalSeconds)
         return
       case 'approved':
+      case 'exchanged':
+        // client-generated credential方式では、Backend側は同じhashペアの再送を冪等replayとして
+        // 扱うため、'exchanged'(自分自身が過去にexchangeを開始済みで、応答だけ失われていた場合)も
+        // 'approved'と同じ経路でexchangeAfterApproval()を呼んでよい。
         await exchangeAfterApproval()
         return
       case 'expired':
         pairingContext = pairingReducer(pairingContext, { type: 'EXPIRED' })
+        await pairingResumeStore?.clear().catch(() => {})
         await showScreen('pairingError', screens.pairingErrorScreenText('expired'))
         return
       case 'cancelled':
-      case 'exchanged':
-        // 'exchanged'はこの端末以外の経路で既に交換済みの場合など、通常発生しない防御的な分岐。
         pairingContext = pairingReducer(pairingContext, { type: 'CANCELLED' })
+        await pairingResumeStore?.clear().catch(() => {})
         await showScreen('pairingError', screens.pairingErrorScreenText('cancelled'))
         return
       case 'failed':
         pairingContext = pairingReducer(pairingContext, { type: 'AUTH_FAILED' })
+        await pairingResumeStore?.clear().catch(() => {})
         await showScreen('pairingError', screens.pairingErrorScreenText('auth_failure'))
         return
     }
@@ -2301,8 +2361,10 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
   async function startPairingFlow(): Promise<void> {
     // Phase 2K: notConnected/pairingErrorに加え、homeメニュー5番目(明示的な再接続)からの起動も許可する。
     if (currentScreen !== 'notConnected' && currentScreen !== 'pairingError' && currentScreen !== 'home') return
+    exchangeCandidate = null
+    await pairingResumeStore?.clear().catch(() => {}) // 前回の残骸を必ず消してから新規開始する
     pairingContext = pairingReducer(pairingContext, { type: 'START' })
-    await showScreen('pairing', screens.pairingScreenText('', ''))
+    await showScreen('pairing', screens.pairingScreenText(''))
     if (pairingContext.state !== 'starting') return
 
     const controller = new AbortController()
@@ -2319,16 +2381,25 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       return
     }
 
+    const expiresAt = Date.now() + outcome.expiresInSeconds * 1000
     pairingContext = pairingReducer(pairingContext, {
       type: 'STARTED',
       pairingId: outcome.pairingId,
-      verificationUrl: outcome.verificationUrl,
       userCode: outcome.userCode,
       pollIntervalSeconds: outcome.pollIntervalSeconds,
+      expiresAt,
     })
-    pairingStartedAt = Date.now()
+    await pairingResumeStore
+      ?.save({
+        pairingId: outcome.pairingId,
+        userCode: outcome.userCode,
+        pollIntervalSeconds: outcome.pollIntervalSeconds,
+        expiresAt,
+        exchangeCandidate: null,
+      })
+      .catch(() => {})
     logSafe({ event: 'product_pairing_started' })
-    await showScreen('pairing', screens.pairingScreenText(outcome.verificationUrl, outcome.userCode))
+    await showScreen('pairing', screens.pairingScreenText(outcome.userCode))
     schedulePairingPoll(outcome.pollIntervalSeconds)
   }
 
@@ -2342,6 +2413,8 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     if (pairingId !== null) {
       void cancelPairingFn({ baseUrl, pairingId, installationId: productInstallationId }).catch(() => {})
     }
+    exchangeCandidate = null
+    await pairingResumeStore?.clear().catch(() => {})
     pairingContext = pairingReducer(pairingContext, { type: 'RESET' })
     logSafe({ event: 'product_pairing_cancelled' })
     await showScreen('notConnected', screens.notConnectedScreenText())
@@ -2766,8 +2839,15 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     // ペアリング画面のままポーリングだけを再開する(仕様: 「バックグラウンドで停止、フォアグラウンドで安全に再開」)。
     if (currentScreen === 'pairing' && pairingContext.state === 'waitingApproval') {
       logSafe({ event: 'foreground_enter', state: 'pairing_resumed' })
-      await showScreen('pairing', screens.pairingScreenText(pairingContext.verificationUrl ?? '', pairingContext.userCode ?? ''))
+      await showScreen('pairing', screens.pairingScreenText(pairingContext.userCode ?? ''))
       schedulePairingPoll(pairingContext.pollIntervalSeconds ?? DEFAULT_PAIRING_POLL_INTERVAL_SECONDS)
+      return
+    }
+    // starting/exchanging中(=startPairingFlow()/exchangeAfterApproval()のPromiseチェーンがまだ
+    // 進行中)にforeground復帰した場合は、ホームへ強制的に戻さず何もしない。進行中の処理が自己解決して
+    // 適切な画面(pairing/pairingSuccess/pairingError)へ遷移する(フェーズ1で発見したガード漏れの修正)。
+    if (currentScreen === 'pairing' && (pairingContext.state === 'starting' || pairingContext.state === 'exchanging')) {
+      logSafe({ event: 'foreground_enter', state: `pairing_${pairingContext.state}` })
       return
     }
     // 未接続/ペアリング成功/ペアリング失敗の各画面は「まだホームメニューに到達していない」ことを表す。
@@ -3016,13 +3096,66 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     // devセッションが有効な間はdevモード(既存動作を変えない)。製品モードでは、有効な
     // device credential(refresh tokenが未失効)を既に保持していればホームへ、なければ
     // 未接続画面を最初に表示する(Calendar/Gemini APIはペアリング完了前には一切呼ばれない)。
+    //
+    // ただし、PluginのJS実行コンテキストがpairing進行中(/connect等スマートフォン内ブラウザへの
+    // 遷移に伴って)に破棄・再起動されることを正常系として扱うため、有効なrefresh tokenの判定より
+    // 先に、永続化されたpairing resume情報の解決を優先する。理由: 既に接続済みの状態からの
+    // 再接続中にJSが再起動した場合、先にrefresh token有無だけを見てhomeへ判定してしまうと、
+    // resumeが解決されずG2側が「接続しました」を一度も表示しないまま静かに終わってしまうため。
     let initialScreen: ScreenId = 'home'
+    let resumedPairing: PersistedPairingResume | null = null
     if (isProductMode) {
       const credential = tokenStore ? await tokenStore.load() : null
       const hasValidRefresh = credential !== null && new Date(credential.refreshTokenExpiresAt).getTime() > Date.now()
-      initialScreen = hasValidRefresh ? 'home' : 'notConnected'
+
+      let persisted = pairingResumeStore ? await pairingResumeStore.load().catch(() => null) : null
+
+      if (persisted?.exchangeCandidate) {
+        if (hasValidRefresh && credential.refreshToken === persisted.exchangeCandidate.refreshToken) {
+          // exchange成功・tokenStore.save()も成功済みで、pairingResumeStore.clear()だけが失敗した残骸。
+          // 安全に破棄して通常のhome判定へフォールスルーする。
+          logSafe({ event: 'product_pairing_resume_stale_cleared', errorCode: 'clear_failed_after_success' })
+          await pairingResumeStore?.clear().catch(() => {})
+          persisted = null
+        } else if (hasValidRefresh && credential.refreshToken !== persisted.exchangeCandidate.refreshToken) {
+          // その後(refresh rotation等で)別のcredentialが正になっている。古い候補で
+          // 現在有効なrefresh tokenを絶対に上書きしないよう、resumeを破棄してtokenStore側を優先する。
+          logSafe({ event: 'product_pairing_resume_stale_cleared', errorCode: 'superseded_by_rotation' })
+          await pairingResumeStore?.clear().catch(() => {})
+          persisted = null
+        }
+        // hasValidRefreshがfalseの場合は比較対象が無い(=上書きの危険が無い)ため、そのままresumeを試みる。
+      }
+
+      if (persisted && persisted.expiresAt > Date.now()) {
+        pairingContext = pairingReducer(pairingContext, {
+          type: 'RESTORED',
+          pairingId: persisted.pairingId,
+          userCode: persisted.userCode,
+          pollIntervalSeconds: persisted.pollIntervalSeconds,
+          expiresAt: persisted.expiresAt,
+        })
+        exchangeCandidate = persisted.exchangeCandidate
+        resumedPairing = persisted
+        initialScreen = 'pairing'
+        logSafe({ event: 'product_pairing_resume_restored', state: exchangeCandidate ? 'exchanging' : 'waitingApproval' })
+      } else {
+        if (persisted) {
+          // ローカルで既に期限切れと分かっているため、ネットワークを呼ばずに掃除するだけ。
+          await pairingResumeStore?.clear().catch(() => {})
+        }
+        initialScreen = hasValidRefresh ? 'home' : 'notConnected'
+      }
     }
     currentScreen = initialScreen
+    deps.onPairingScreenActive?.(initialScreen === 'pairing')
+
+    const initialContent =
+      initialScreen === 'notConnected'
+        ? screens.notConnectedScreenText()
+        : initialScreen === 'pairing'
+          ? screens.pairingScreenText(resumedPairing?.userCode ?? '')
+          : screens.homeScreenText(homeMenuIndex)
 
     const container = new TextContainerProperty({
       xPosition: 0,
@@ -3034,7 +3167,7 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
       paddingLength: 4,
       containerID: CONTAINER_ID,
       containerName: CONTAINER_NAME,
-      content: initialScreen === 'notConnected' ? screens.notConnectedScreenText() : screens.homeScreenText(homeMenuIndex),
+      content: initialContent,
       isEventCapture: 1,
     })
 
@@ -3044,6 +3177,13 @@ export function createApp(bridge: BridgeLike, deps: AppDeps = {}): App {
     logSafe({ event: 'startup_page_created', startResult: result === 0, state: isProductMode ? 'product' : 'dev' })
 
     attachListener()
+
+    if (resumedPairing !== null) {
+      // setTimeoutそのものを復元するのではなく、永続化されたpairing identityから状態を再構築する。
+      // pollPairingOnce()を待たずに1回だけ即時実行し、approved/exchanged/pending/expired等の
+      // 現在状態をBackendへ問い合わせて反映する(既存のpollPairingOnce/exchangeAfterApprovalを再利用)。
+      void pollPairingOnce(resumedPairing.pollIntervalSeconds)
+    }
 
     const backendAvailable = await checkBackendHealth(baseUrl).catch(() => false)
     logSafe({ event: 'backend_health_checked', backendAvailable })

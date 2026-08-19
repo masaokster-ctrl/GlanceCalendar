@@ -68,6 +68,7 @@ import {
   type ProductDeviceRefreshTokenRepository,
 } from './product/productDeviceRefreshTokenRepository.js';
 import { InMemoryProductAuditRepository, type ProductAuditRepository } from './product/productAuditRepository.js';
+import { InMemoryProductExchangeCoordinator, type ProductExchangeCoordinator } from './product/productExchangeCoordinator.js';
 import {
   InMemoryGoogleCredentialRepository,
   type GoogleCredentialRepository,
@@ -130,6 +131,7 @@ export interface AppConfig {
   productUserRepo?: ProductUserRepository;
   productDeviceRefreshTokenRepo?: ProductDeviceRefreshTokenRepository;
   productAuditRepo?: ProductAuditRepository;
+  productExchangeCoordinator?: ProductExchangeCoordinator;
   productCredentialRepo?: GoogleCredentialRepository;
   productCredentialCipher?: GoogleCredentialCipher;
   productExchangeFn?: ProductExchangeFn;
@@ -165,6 +167,11 @@ export function createApp(config: AppConfig): Express {
   const productUserRepo = config.productUserRepo ?? new InMemoryProductUserRepository();
   const productDeviceRefreshTokenRepo = config.productDeviceRefreshTokenRepo ?? new InMemoryProductDeviceRefreshTokenRepository();
   const productAuditRepo = config.productAuditRepo ?? new InMemoryProductAuditRepository();
+  // exchange(credential activation)はProductPairingRepository等の個別メソッドではなくcoordinatorが
+  // 単一transactionでatomicに行う。config側でproductPairingRepo等をカスタム注入する場合、デフォルトの
+  // coordinatorはそれらとは別のインメモリstoreを持つため、テスト等でexchangeの整合性を検証したい場合は
+  // productExchangeCoordinatorも同じstoreを共有する形で明示的に注入すること。
+  const productExchangeCoordinator = config.productExchangeCoordinator ?? new InMemoryProductExchangeCoordinator();
   const productCredentialCipher = config.productCredentialCipher ?? new NotConfiguredGoogleCredentialCipher();
   const productCredentialRepo = config.productCredentialRepo ?? new InMemoryGoogleCredentialRepository(productCredentialCipher);
   const productSigningKeyProvider = config.productSigningKeyProvider ?? new ProductSigningKeyProvider(null);
@@ -357,12 +364,11 @@ export function createApp(config: AppConfig): Express {
   app.use(
     createProductPairingsRouter({
       clock,
-      pluginSessionRepo,
       rateLimitRepo: pluginRateLimitRepo,
       pairingRepo: productPairingRepo,
       installationRepo: productInstallationRepo,
       auditRepo: productAuditRepo,
-      deviceRefreshTokenRepo: productDeviceRefreshTokenRepo,
+      exchangeCoordinator: productExchangeCoordinator,
       ...(config.productPublicBaseUrl !== undefined ? { publicBaseUrl: config.productPublicBaseUrl } : {}),
       ...(config.productPairingRateLimitPerMinute !== undefined
         ? { rateLimitPerMinute: config.productPairingRateLimitPerMinute }

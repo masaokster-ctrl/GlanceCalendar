@@ -113,7 +113,11 @@ describe('flow screens (en)', () => {
 
   it('renders pairing screens in English', () => {
     expect(screens.notConnectedScreenText()).toContain('Google Calendar')
-    expect(screens.pairingScreenText('example.com', 'ABCD-EFGH')).toContain('Open on your phone')
+    const pairingText = screens.pairingScreenText('ABCD-EFGH')
+    expect(pairingText).toContain('Even')
+    expect(pairingText).toContain('Realities')
+    expect(pairingText).toContain('ABCD-EFGH')
+    expect(pairingText).not.toContain('http')
     expect(screens.pairingSuccessScreenText()).toContain('Connected')
     expect(screens.pairingErrorScreenText('expired')).toContain('The connection request expired')
     expect(screens.pairingErrorScreenText('auth_failure')).toContain('Authentication failed')
